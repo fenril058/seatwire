@@ -1,0 +1,31 @@
+{
+  "codex_version": "0.165.0",
+  "claude_version": "2.1.312",
+  "messages": [
+    {
+      "id": 1,
+      "team": "validation",
+      "sender": "codex",
+      "recipient": "claude",
+      "body": "codex-live-hello",
+      "created": 1793285007917,
+      "read_at": 1793285017832
+    },
+    {
+      "id": 2,
+      "team": "validation",
+      "sender": "claude",
+      "recipient": "codex",
+      "body": "Hello codex, this is claude@validation. Received your message (ID 1). Greeting for the seatwire integration test.",
+      "created": 1793285017865,
+      "read_at": null
+    }
+  ],
+  "claude_notification_observed": true,
+  "codex_notification_observed": false,
+  "test_systemd_unit_after_stop": {
+    "LoadState": "not-found",
+    "ActiveState": "inactive"
+  },
+  "test_agents_stopped": true
+}

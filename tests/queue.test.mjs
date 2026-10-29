@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync,writeFileSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { runCodexQueue } from '../vendor/agmsg/codex-queue-io.mjs';
+const thread='12345678-1234-4123-8123-123456789abc';
+test('queue subprocess contract, exact destination and bounded timeout',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'sw-queue-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const executable=join(dir,'queue');
+ const run=()=>runCodexQueue({executable,codexHome:dir,thread,message:'inbox',timeoutMs:1000});
+ writeFileSync(executable,`#!${process.execPath}\nif(process.argv[2]!=='queue'||process.argv[3]!=='--thread'||process.argv[5]!=='--message')process.exit(1);\nconsole.log('Queued message 12345678-1234-4123-8123-123456789abd for thread '+process.argv[4]+'.');\n`,{mode:0o700});
+ assert.equal((await run()).kind,'queued');
+ writeFileSync(executable,`#!${process.execPath}\nconsole.log('Queued message 12345678-1234-4123-8123-123456789abd for thread 12345678-1234-4123-8123-123456789abe.');\n`);
+ assert.equal((await run()).reason,'queue_output_unrecognized');
+ writeFileSync(executable,`#!${process.execPath}\nsetInterval(()=>{},1000);\n`);
+ const start=Date.now();assert.equal((await run()).kind,'timeout');assert.ok(Date.now()-start<4000);
+});

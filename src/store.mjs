@@ -1,0 +1,98 @@
+import { DatabaseSync } from 'node:sqlite';
+import { mkdirSync, lstatSync } from 'node:fs';
+import { join, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
+import { name, alive } from './identity.mjs';
+export function statePath() {
+  const base = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
+  if (!isAbsolute(base)) throw Error('XDG_STATE_HOME must be absolute');
+  return join(base, 'seatwire');
+}
+function privatePath(path, directory) {
+  const s = lstatSync(path);
+  if (s.uid !== process.getuid() || (s.mode & 0o077) || !(directory ? s.isDirectory() : s.isFile())) throw Error(`unsafe state permissions/type: ${path}`);
+}
+export class Store {
+  constructor(dir = statePath()) {
+    process.umask(0o077);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    privatePath(dir, true);
+    this.path = join(dir, 'messages.sqlite3');
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { privatePath(this.path + suffix, false); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+    this.db = new DatabaseSync(this.path);
+    this.db.exec('PRAGMA busy_timeout=5000');
+    this.tx(() => {
+      const version = this.db.prepare('PRAGMA user_version').get().user_version;
+      if (version !== 0 && version !== 1) throw Error(`unsupported schema ${version}; restore compatible binary or backup`);
+      if (!version) {
+        if (this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").get()) throw Error('unversioned database is not empty');
+        this.db.exec(`
+          CREATE TABLE agents(team TEXT, name TEXT, kind TEXT NOT NULL, target TEXT, generation TEXT,
+            notified INTEGER NOT NULL DEFAULT 0, lease TEXT, lease_until INTEGER NOT NULL DEFAULT 0,
+            retry_at INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0, error TEXT,
+            PRIMARY KEY(team,name));
+          CREATE TABLE launches(team TEXT, name TEXT, record TEXT NOT NULL, PRIMARY KEY(team,name));
+          CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, team TEXT NOT NULL,
+            sender TEXT NOT NULL, recipient TEXT NOT NULL, body TEXT NOT NULL,
+            created INTEGER NOT NULL, read_at INTEGER);
+          CREATE INDEX inbox ON messages(team,recipient,id);
+          PRAGMA user_version=1;
+        `);
+      }
+    });
+    this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
+  }
+  tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const v = fn(); this.db.exec('COMMIT'); return v; } catch(e) { this.db.exec('ROLLBACK'); throw e; } }
+  register(team, who, kind, target = null) {
+    name(team); name(who);
+    if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
+    return this.tx(() => {
+      const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
+      const previous = old?.target && JSON.parse(old.target);
+      if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
+      if (target && this.db.prepare('SELECT name FROM agents WHERE team=? AND name<>? AND json_extract(target,\'$.session\')=?').get(team,who,target.session)) throw Error('session already assigned to another name');
+      this.db.prepare(`INSERT INTO agents(team,name,kind,target,generation) VALUES(?,?,?,?,?)
+        ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
+        notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
+    });
+  }
+  send(team, from, to, body) {
+    name(team); name(from); name(to);
+    if (!body || Buffer.byteLength(body)>1048576) throw Error('message must be 1..1048576 bytes');
+    return this.tx(() => {
+      for (const who of [from,to]) if (!this.db.prepare('SELECT 1 FROM agents WHERE team=? AND name=?').get(team,who)) throw Error(`unregistered agent: ${who}`);
+      return Number(this.db.prepare('INSERT INTO messages(team,sender,recipient,body,created) VALUES(?,?,?,?,?)').run(team,from,to,body,Date.now()).lastInsertRowid);
+    });
+  }
+  inbox(team, who, history=false) {
+    name(team); name(who);
+    return this.db.prepare(history ? 'SELECT * FROM messages WHERE team=? AND (recipient=? OR sender=?) ORDER BY id' : 'SELECT * FROM messages WHERE team=? AND recipient=? AND read_at IS NULL ORDER BY id').all(...(history ? [team,who,who] : [team,who]));
+  }
+  ack(team, who, ids) {
+    name(team); name(who);
+    if (!ids.length || ids.some(x=> !Number.isSafeInteger(x)||x<1)) throw Error('ack requires explicit message IDs');
+    return this.tx(() => ids.reduce((n,id)=>n+Number(this.db.prepare('UPDATE messages SET read_at=? WHERE team=? AND recipient=? AND id=? AND read_at IS NULL').run(Date.now(),team,who,id).changes),0));
+  }
+  claim() {
+    return this.tx(() => {
+      const row = this.db.prepare(`SELECT a.*, (SELECT max(id) FROM messages m WHERE m.team=a.team AND m.recipient=a.name AND read_at IS NULL) AS upto
+        FROM agents a WHERE target IS NOT NULL AND lease_until<? AND retry_at<? AND upto>notified LIMIT 1`).get(Date.now(),Date.now());
+      if (!row) return null;
+      row.lease = randomUUID();
+      this.db.prepare('UPDATE agents SET lease=?,lease_until=? WHERE team=? AND name=?').run(row.lease,Date.now()+30000,row.team,row.name);
+      return row;
+    });
+  }
+  finish(row, error) {
+    this.db.prepare(`UPDATE agents SET notified=CASE WHEN ? IS NULL THEN ? ELSE notified END,
+      failures=CASE WHEN ? IS NULL THEN 0 ELSE failures+1 END,error=?,retry_at=?,lease=NULL,lease_until=0
+      WHERE team=? AND name=? AND generation=? AND lease=?`).run(error,row.upto,error,error,error?Date.now()+Math.min(60000,1000*2**Math.min(row.failures,6)):0,row.team,row.name,row.generation,row.lease);
+  }
+  status() {
+    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures FROM agents').all().map(({target,...r})=>({...r,online:target?alive(JSON.parse(target)):false}));
+  }
+  close(){ this.db.close(); }
+}
