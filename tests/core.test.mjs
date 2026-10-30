@@ -61,7 +61,8 @@ test('real Unix socket receives a nudge, no body; no duplicate on next poll',asy
   s.register('test','alice','claude-code',{pid:process.pid,witness:witness(process.pid),session:randomUUID(),socket:path,socketWitness:socketWitness(path),token:'test-token'});
   s.send('test','bob','alice','SECRET BODY');
   await tick(s);await new Promise(r=>setTimeout(r,20));
-  assert.ok(chunks.join('').includes('seatwire --team test --name alice inbox'));
+  assert.ok(chunks.join('').includes('seatwire --team test --name alice'));
+  assert.ok(chunks.join('').includes("--state-home '" + dir + "' inbox"));
   assert.ok(chunks.join('').includes('test-token'));
   assert.ok(!chunks.join('').includes('SECRET BODY'));
   assert.equal(await tick(s),false); assert.equal(s.inbox('test','alice').length,1);

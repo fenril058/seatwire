@@ -55,7 +55,8 @@ Its channel state machines depend on install.db, role-session files, bridge stat
 Its SessionStart scripts capture profile/thread or socket/token and refresh resumed sessions.
 Its spawn implementation also depends on placement drivers, actas locks and installation state.
 seatwire reuses only the two self-contained I/O modules and implements its own smaller state model.
-Teams and named agents replace actas role files; a name is explicitly selected per session.
+Teams and named agents replace actas role files.
+Names may be explicitly selected or derived from an authoritative SessionStart UUID.
 
 cclens commit `14c611720a98a4fbec2b576fe878175031ef651d` uses crane, rust-overlay and bundled rusqlite.
 Its core, adapters and SQLite store are separated, with inline Rust unit tests.
@@ -111,3 +112,22 @@ The launch ID is a generation marker, not a secret or a boundary against malicio
 The database must still be writable from the hook's filesystem sandbox.
 Registration errors remain visible in status; no automatic hook trust is performed.
 The runtime dependency set remains Node.js and, for spawn, tmux; no helper server framework or new package dependency is introduced.
+
+## Ordinary-session discovery
+
+`context.mjs` resolves authoritative session metadata and delegates process identity to `identity.mjs`.
+SessionStart without an assigned role registers KIND-UUID in the default team.
+Commands resolve a registered live session using an environment UUID, falling back to a verified ancestor only when no UUID was supplied.
+Ambiguous or stale matches fail instead of selecting the latest session.
+Peers expose project, kind, name and liveness, never transport credentials.
+Project matching uses canonical directories, without Git or shell dependencies.
+Explicit offline identities continue to work.
+Reply validates the original recipient and commits a new message without acknowledging the original.
+
+Linux process witnesses and Unix ownership checks remain platform-specific.
+The discovery layer adds no new /proc, tmux or shell dependency; native Windows still needs process, ACL and notification adapters and is not supported yet.
+Runtime validation protects session metadata and received-message IDs; this revision does not claim static type checking across the existing JavaScript codebase.
+
+The default runtime remains the pinned Node.js 24.
+The additional node26 flake check runs the same suite with pinned Node.js 26.12.1.
+That version predates the 26.13.0 LTS transition, so switching the default requires a newer pinned input and live adapter verification.

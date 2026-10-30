@@ -2,9 +2,12 @@
 
 ## Environment
 
-The test host is Linux with Node.js 24.18.0, Nix 2.34.8, Codex CLI 0.165.0 and Claude Code 2.1.312.
+The current test host is Ubuntu 24.04.5 LTS on WSL2, with kernel `6.18.54.1-microsoft-standard-WSL2`.
+This was confirmed from `/etc/os-release` and `/proc/sys/kernel/osrelease` after the ordinary-session revision.
+The recorded tool versions are Node.js 24.18.0, Nix 2.34.8, Codex CLI 0.165.0 and Claude Code 2.1.312.
 Nix inputs are pinned in flake.lock.
-Tests ran on x86_64-linux; aarch64-linux and WSL have not been exercised.
+The ordinary-session revision tests ran on x86_64-linux under WSL2.
+Aarch64-linux and native Windows have not been exercised.
 
 ## Automated evidence
 
@@ -43,7 +46,8 @@ The harness copies the generated unit unchanged and creates a runtime-only link 
 Home Manager activation itself starts and stops the worker with startServices enabled.
 Assertions check repeated activation, stopped worker PID on disable, removed managed unit path, retained message data, surviving managed agent, successful re-enable/readback and a second stop.
 The harness removes its runtime link and stops its stand-in agent on exit.
-This verifies the module's service lifecycle on this Linux host, not a WSL installation or a full desktop configuration migration.
+This records the module's service lifecycle on the test host.
+It does not establish a full desktop configuration migration.
 
 GitHub Actions now runs flake checks, isolated activation and the running-service lifecycle test on Ubuntu 24.04.
 The workflow is configured locally; no successful GitHub-hosted run is claimed before it is pushed and executed.
@@ -105,3 +109,53 @@ Remote/shared-server arrangements may be rejected.
 Resuming and Claude permission-mode behavior need live-agent validation.
 Normal despawn requests interruption, not confirmed graceful exit.
 There is no agent process restart supervisor, remote messaging, or advanced role orchestration.
+
+## Ordinary-session revision (2026-10-31)
+
+The host suite passed 24 tests on Node.js 24.18.0 after adding automatic session registration, discovery and reply.
+New tests cover unnamed SessionStart in a stand-in Codex process, identity ambiguity, expired sessions, project filtering, credential omission and replies restricted to the original recipient.
+The notification state-directory assertion failed against the old implementation and passed after including the explicit state base in the inbox instruction.
+The assertion observes the actual Unix socket payload.
+
+A normally launched real Claude Code print session used an invocation-only SessionStart hook and an isolated temporary database.
+No seatwire spawn, team environment or assigned name was used for Claude.
+Astra sent a synthetic message to the automatically derived mailbox; Claude ran peers, inbox, reply and ack without team/name flags.
+The host read the reply body `seatwire-claude-received` and acknowledged it.
+Both messages were retained and explicitly read.
+This validates model-driven mailbox use, not an idle-session notification round trip.
+The session exited after its print request.
+Claude noted that peers did not show Astra; Astra was intentionally an offline mailbox, so this matched the live-only filter.
+The hook introduction now mentions peers --all for this case.
+
+Automatic approval review rejected the initial source-review experiment because it could send private code to an external model without specific data-transfer approval.
+The successful experiment instead allowed only CLI access to synthetic messages and instructed Claude not to read project sources.
+No persistent agent settings or hook trust decisions were changed.
+
+The fixed nixpkgs input supplies Node.js 24.21.0 and 26.12.1.
+The Node.js 26 compatibility run exposed a test-harness issue: replacing process.env with a plain object did not update the environment implicitly inherited by child processes.
+A separate probe observed an empty inherited variable versus the expected value when passing env explicitly.
+Tests now restore environment entries in place.
+The default runtime remains Node.js 24; adopting Node.js 26 LTS requires updating the pin beyond 26.12.1.
+The official release table lists Node.js 26 as LTS: https://nodejs.org/en/about/previous-releases.
+
+The automated tests, isolated Home Manager activation and real Claude mailbox exchange in this revision ran on WSL2 Ubuntu.
+Native Windows execution remains unverified.
+An idle-session notification round trip remains unverified on this WSL2 host.
+Non-managed registration still needs access to an authoritative lifecycle UUID and a verifiable host ancestor.
+Sessions whose sandbox hides host ancestry cannot register through actas; discovery never guesses an alternative process.
+Claude /clear can leave multiple same-process registrations; automatic ancestor-only lookup then requires explicit identity selection.
+The new discovery layer does not remove this remaining lifecycle limitation.
+
+The ordinary Codex exec experiment ran on Codex CLI 0.165.0 with workspace-write sandboxing.
+Its actas command failed with `cannot identify agent ancestor; register from the agent lifecycle hook`.
+It stopped without sending, changing permissions or guessing a session.
+This confirms that the non-managed sandbox registration gap remains.
+
+The x86_64-linux flake checks passed on Node.js 24.21.0 and 26.12.1, 24 tests each, including Home Manager generation.
+The isolated Home Manager activation, disable, DB retention and re-enable test also passed.
+That test revealed its absolute-path flake source included ignored .dev data in the local Nix store.
+Both Home Manager harnesses now use git+file sources, and assert that .dev is excluded before building.
+No source was uploaded to a remote cache by these commands.
+The corrected isolated Home Manager test passed again with the source-exclusion assertion enabled.
+The specific store source copied by the earlier run was deleted; the original local DB was retained.
+The running-systemd harness was updated to the same source selection but was not rerun in this revision.

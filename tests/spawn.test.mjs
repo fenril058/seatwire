@@ -6,10 +6,14 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { Store } from '../src/store.mjs';
 import { launch,despawn } from '../src/spawn.mjs';
+function restoreEnvironment(previous) {
+  for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
+  Object.assign(process.env,previous);
+}
 test('real tmux: literal boot prompt, resume argv, ownership refusal and forced stop',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'sw-spawn-'));
  const old={...process.env};const s=new Store(join(dir,'state'));
- t.after(()=>{process.env=old;s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  const fake=join(dir,'codex');const output=join(dir,'args.json');
  writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(output)},JSON.stringify({args:process.argv.slice(2),state:process.env.XDG_STATE_HOME}));\nprocess.on('SIGINT',()=>writeFileSync(${JSON.stringify(join(dir,'interrupted'))},'yes'));\nsetInterval(()=>{},1000);\n`,{mode:0o700});
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
@@ -53,7 +57,7 @@ if(process.argv.includes('new-session')) {
 const r=spawnSync(${JSON.stringify(realTmux)},process.argv.slice(2),{stdio:'inherit'});process.exit(r.status??1);
 `,{mode:0o700});
  process.env.PATH=bin+':'+old.PATH;process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
- t.after(()=>{try{despawn(s,'test','reviewer',true);}catch{}process.env=old;s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{try{despawn(s,'test','reviewer',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  launch(s,'test','reviewer','codex',{cli:resolve('src/cli.mjs')});
  assert.equal(s.status().find(a=>a.name==='reviewer').error,'hook acquired lock');
 });
@@ -66,7 +70,7 @@ test('host validates a managed hook without relying on hook process ancestry', a
  const fake=join(dir,'codex');writeFileSync(fake,`#!${process.execPath}\nsetInterval(()=>{},1000);\n`,{mode:0o700});
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;process.env.XDG_STATE_HOME=dir;
  const r=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
- t.after(()=>{try{despawn(s,'test','codex',true);}catch{}process.env=old;s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{try{despawn(s,'test','codex',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  const session=randomUUID();const input={session_id:session,cwd:process.cwd()};
  submitRegistration(s,'test','codex','codex',r.launchId,input,{});
  await waitReady(s,'test','codex',r.launchId,1000);
@@ -89,7 +93,7 @@ test('readiness timeout preserves a launched process; abandoned reservation can 
  const fake=join(dir,'codex');writeFileSync(fake,`#!${process.execPath}\nsetInterval(()=>{},1000);\n`,{mode:0o700});
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
  const r=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
- t.after(()=>{try{despawn(s,'test','codex',true);}catch{}process.env=old;s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{try{despawn(s,'test','codex',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  await assert.rejects(waitReady(s,'test','codex',r.launchId,100),/timed out/);
  assert.equal(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
  const row=JSON.parse(s.db.prepare('SELECT record FROM launches').get().record);
@@ -129,7 +133,7 @@ test('host refuses replaced launch identity and socket without publishing a targ
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
  const r=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
  const original=s.db.prepare('SELECT record FROM launches').get().record;
- t.after(()=>{s.db.prepare('UPDATE launches SET record=?').run(original);try{despawn(s,'test','codex',true);}catch{}process.env=old;s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{s.db.prepare('UPDATE launches SET record=?').run(original);try{despawn(s,'test','codex',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  const input={session_id:randomUUID(),cwd:process.cwd()};
  submitRegistration(s,'test','codex','codex',r.launchId,input,{});
  s.db.prepare('UPDATE launches SET record=?').run(JSON.stringify({...JSON.parse(original),id:randomUUID()}));

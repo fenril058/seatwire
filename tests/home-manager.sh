@@ -7,8 +7,9 @@ export SEATWIRE_TEST_HOME="$test_root/home"
 mkdir -p "$SEATWIRE_TEST_HOME"
 export SEATWIRE_TEST_USER="$(id -un)"
 expr='let
- f = builtins.getFlake (builtins.getEnv "SEATWIRE_SOURCE");
- in (f.inputs.home-manager.lib.homeManagerConfiguration {
+ f = builtins.getFlake ("git+file://" + builtins.getEnv "SEATWIRE_SOURCE");
+ in assert !(builtins.pathExists (f.outPath + "/.dev"));
+ (f.inputs.home-manager.lib.homeManagerConfiguration {
  pkgs = f.inputs.nixpkgs.legacyPackages.x86_64-linux;
  modules = [ f.homeManagerModules.default {
  home.username = builtins.getEnv "SEATWIRE_TEST_USER";

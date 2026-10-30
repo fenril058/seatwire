@@ -3,6 +3,7 @@ import { mkdirSync, lstatSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { projectPath } from './context.mjs';
 import { name, alive } from './identity.mjs';
 export function statePath() {
   const base = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
@@ -77,6 +78,21 @@ export class Store {
       for (const who of [from,to]) if (!this.db.prepare('SELECT 1 FROM agents WHERE team=? AND name=?').get(team,who)) throw Error(`unregistered agent: ${who}`);
       return Number(this.db.prepare('INSERT INTO messages(team,sender,recipient,body,created) VALUES(?,?,?,?,?)').run(team,from,to,body,Date.now()).lastInsertRowid);
     });
+  }
+  reply(team, who, id, body) {
+    name(team); name(who);
+    if (!Number.isSafeInteger(id) || id < 1) throw Error('reply requires a received message ID');
+    const message = this.db.prepare('SELECT sender FROM messages WHERE team=? AND recipient=? AND id=?').get(team,who,id);
+    if (!message) throw Error('message not received by this agent');
+    return this.send(team,who,message.sender,body);
+  }
+  peers(team, project, all = false) {
+    name(team);
+    return this.db.prepare('SELECT team,name,kind,target,error FROM agents WHERE team=? ORDER BY name').all(team)
+      .map(({target,...row}) => {
+        const t = target && JSON.parse(target);
+        return {...row, project:t?.project || null, online:!!t && this.targetAlive(row.team,row.name,t)};
+      }).filter(row => all || (row.online && row.project && projectPath(row.project) === projectPath(project)));
   }
   inbox(team, who, history=false) {
     name(team); name(who);

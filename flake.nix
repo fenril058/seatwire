@@ -31,6 +31,10 @@
       homeManagerModules.default = import ./nix/home-manager.nix self;
       checks = each (system: {
         package = self.packages.${system}.default;
+        node26 = self.packages.${system}.default.overrideAttrs (_: {
+          nativeBuildInputs = with nixpkgs.legacyPackages.${system}; [ makeWrapper nodejs_26 tmux ];
+          # Compatibility check only; the pinned 26.12.1 predates the LTS release.
+        });
         home-manager = (home-manager.lib.homeManagerConfiguration {
           pkgs = nixpkgs.legacyPackages.${system};
           modules = [ self.homeManagerModules.default {

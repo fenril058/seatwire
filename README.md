@@ -71,11 +71,32 @@ flake 入力にこのリポジトリを追加し、モジュールを import し
 Codex の未信頼フックは実行されないため、エージェント自身の信頼確認が必要です。
 
 ```sh
-SEATWIRE_TEAM=demo SEATWIRE_NAME=reviewer codex
-SEATWIRE_TEAM=demo SEATWIRE_NAME=implementer claude
+codex
+claude
 systemctl --user status seatwire
 seatwire status
 ```
+
+フック連携を有効にすると、通常起動でも種類とセッション UUID から名前を自動登録します。
+チーム指定を省略すると `default` を使います。
+エージェント内では以下のコマンドで協業できます。
+
+```sh
+seatwire peers
+seatwire send --to <peers が返した名前> 'この変更をレビューして'
+seatwire inbox
+seatwire reply 1 '確認結果です'
+seatwire ack 1
+```
+
+`peers` は同じチームで、現在の作業ディレクトリに登録された生存セッションを表示します。
+`peers --all` は同じチームの別ディレクトリとオフラインの宛先も表示します。
+ディレクトリはシンボリックリンクを解決して比較し、Git worktree 間を自動で同一視しません。
+`whoami` で現在の名前を確認できます。
+送受信時は登録済みのセッション ID、またはエージェント祖先から自分を特定します。
+複数候補があれば失敗し、チームや名前を明示するよう案内します。
+従来の `SEATWIRE_TEAM` と `SEATWIRE_NAME` による役割指定も使えます。
+`reply` は自分が受信したメッセージだけを対象にし、既読にはしません。
 
 手動起動したセッションでは、セッション開始フックがセッション ID・祖先プロセス・通知先を検証して登録します。
 この経路ではホスト祖先を参照できないサンドボックス内からの登録は失敗します。
@@ -187,7 +208,9 @@ GitHub Actions は固定した Nix 入力で `nix flake check`、一時 HOME の
 WSL でも通知用ユーザーサービスには動作中の systemd が必要です。
 `systemctl --user is-active default.target` で確認できます。
 利用できない環境ではホストで `seatwire daemon` を実行してください。
-WSL 自体での実機検証は未実施です。
+今回の検証環境は WSL2 上の Ubuntu 24.04.5 LTS（カーネル `6.18.54.1-microsoft-standard-WSL2`）です。
+この環境で自動テスト、Home Manager の導入と撤去、通常起動した Claude Code との往復通信を確認しました。
+待機中の通知による双方向応答と Windows ネイティブ実行は未検証です。
 
 ## 設計・出典・候補名
 

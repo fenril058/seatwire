@@ -10,15 +10,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launch, despawn, launchStatus } from './spawn.mjs';
 import { submitRegistration, reconcileRegistrations, waitReady } from './registration.mjs';
 import { tick } from './notify.mjs';
-const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
+import { sessionId, automaticName, currentIdentity, projectPath } from './context.mjs';
 function absolute(v) { if (!isAbsolute(v || '') || /[\x00-\x1f]/.test(v)) throw Error('invalid absolute path'); return v; }
 export function registration(kind, input={}, env=process.env) {
   if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
-  const session = input.session_id || (kind==='codex' ? env.CODEX_THREAD_ID : env.CLAUDE_SESSION_ID);
-  if (!uuid.test(session || '')) throw Error('missing authoritative session UUID');
-  if (kind==='codex' && env.CODEX_THREAD_ID && env.CODEX_THREAD_ID!==session) throw Error('conflicting session IDs');
+  const session = sessionId(kind, input, env);
   const pid = ancestor(kind);
-  const target = { session,pid,witness:witness(pid),project:absolute(input.cwd || process.cwd()) };
+  const target = { session,pid,witness:witness(pid),project:projectPath(absolute(input.cwd || process.cwd())) };
   if (kind==='codex') target.home=absolute(env.CODEX_HOME || join(homedir(),'.codex'));
   else {
     target.socket=absolute((env.CLAUDE_CODE_MESSAGING_SOCKET || '').replace(/^uds:/,''));
@@ -30,14 +28,17 @@ export function registration(kind, input={}, env=process.env) {
   return target;
 }
 async function main() {
-  const {values:v,positionals:p}=parseArgs({allowPositionals:true,options:{team:{type:'string'},name:{type:'string'},to:{type:'string'},kind:{type:'string'},help:{type:'boolean'},once:{type:'boolean'},force:{type:'boolean'},'boot-prompt':{type:'string'},resume:{type:'string'},'launch-id':{type:'string'},'state-home':{type:'string'},'wait-ready':{type:'boolean'},'ready-timeout':{type:'string'}}});
-  const team=v.team || process.env.SEATWIRE_TEAM || 'default';
-  const who=v.name || process.env.SEATWIRE_NAME;
+  const {values:v,positionals:p}=parseArgs({allowPositionals:true,options:{team:{type:'string'},name:{type:'string'},to:{type:'string'},kind:{type:'string'},help:{type:'boolean'},all:{type:'boolean'},once:{type:'boolean'},force:{type:'boolean'},'boot-prompt':{type:'string'},resume:{type:'string'},'launch-id':{type:'string'},'state-home':{type:'string'},'wait-ready':{type:'boolean'},'ready-timeout':{type:'string'}}});
+  let team=v.team || process.env.SEATWIRE_TEAM;
+  let who=v.name || process.env.SEATWIRE_NAME;
   const command=p.shift();
   if (!command || v.help) { console.log(`seatwire [--team TEAM] [--name AGENT] COMMAND
 register --kind codex|claude-code  Register an offline mailbox
 actas --kind KIND                Bind this agent session from its environment
 hook --kind KIND                 Bind from SessionStart JSON on stdin
+peers [--all]                   Find live peers in this project (all includes offline/other projects)
+whoami                          Show this session identity
+reply ID MESSAGE                Reply to a received message without marking it read
 send --to AGENT MESSAGE          Persist a message
 inbox                           Show unread messages without marking read
 ack ID...                       Mark explicit received IDs read
@@ -48,10 +49,16 @@ daemon [--once]                 Run host notifications
 spawn KIND NAME [--boot-prompt TEXT] [--resume UUID] [--wait-ready] [--ready-timeout MS]
 despawn NAME [--force]           Interrupt or explicitly kill a managed session
 Use --state-home PATH to select an explicit XDG state base.
-Use SEATWIRE_TEAM and SEATWIRE_NAME for hook/session identity.`); return; }
+SessionStart automatically assigns an identity; explicit team/name override it.`); return; }
   const store=new Store(v['state-home'] ? join(absolute(v['state-home']),'seatwire') : undefined);
   try {
     let result;
+    if (['send','inbox','history','ack','reply','whoami'].includes(command)) {
+      const identity = currentIdentity(store, {team, who});
+      team = identity.team; who = identity.name;
+    }
+    if (!team && ['peers','spawn','despawn'].includes(command)) team = currentIdentity(store, {who, required:false})?.team;
+    team ||= 'default';
     switch(command) {
       case 'spawn': {
         const timeout=Number(v['ready-timeout'] || 30000);
@@ -63,17 +70,20 @@ Use SEATWIRE_TEAM and SEATWIRE_NAME for hook/session identity.`); return; }
       case 'despawn': result=despawn(store,team,p[0],v.force); break;
       case 'register': store.register(team,who,v.kind); result={registered:who}; break;
       case 'actas': case 'hook': {
-        if (!who && command==='hook') return;
         const input=command==='hook'?JSON.parse(readFileSync(0,'utf8')):{};
+        who ||= automaticName(v.kind, sessionId(v.kind, input));
         const launchId=v['launch-id'] || process.env.SEATWIRE_LAUNCH_ID;
         if (command==='hook' && launchId) submitRegistration(store,team,who,v.kind,launchId,input);
         else {
           if (v['launch-id']) throw Error('launch-id is only accepted by SessionStart hook');
           store.register(team,who,v.kind,registration(v.kind,input));
         }
-        if (command==='hook') { console.log(`seatwire: ${who}@${team}; run seatwire --team ${team} --name ${who} inbox.`); return; }
+        if (command==='hook') { console.log(`seatwire: ${who}@${team}; use seatwire peers, seatwire inbox, and seatwire send --to NAME MESSAGE. Use peers --all to include offline mailboxes. Only collaborate when authorized by the user.`); return; }
         result={registered:who}; break;
       }
+      case 'whoami': result={team,name:who}; break;
+      case 'peers': result=store.peers(team,process.cwd(),v.all); break;
+      case 'reply': result={id:store.reply(team,who,Number(p.shift()),p.join(' '))}; break;
       case 'send': result={id:store.send(team,who,v.to,p.join(' '))}; break;
       case 'inbox': case 'history': result=store.inbox(team,who,command==='history'); break;
       case 'ack': result={marked:store.ack(team,who,p.map(Number))}; break;

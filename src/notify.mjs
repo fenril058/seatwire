@@ -1,5 +1,6 @@
 import { runCodexQueue } from '../vendor/agmsg/codex-queue-io.mjs';
 import { sendClaudeCodeMessage, latestPermissionMode } from '../vendor/agmsg/claude-code-queue-io.mjs';
+import { dirname } from 'node:path';
 import { socketWitness } from './identity.mjs';
 export async function tick(store) {
   const row = store.claim();
@@ -7,7 +8,7 @@ export async function tick(store) {
   try {
     const target = JSON.parse(row.target);
     if (!store.targetAlive(row.team,row.name,target)) throw Error('session process expired');
-    const body = `[seatwire:${row.generation}:${row.upto}] New messages. Run seatwire --team ${row.team} --name ${row.name} inbox.`;
+    const body = `[seatwire:${row.generation}:${row.upto}] New messages. Run seatwire --team ${row.team} --name ${row.name} --state-home ${shellQuote(dirname(dirname(store.path)))} inbox.`;
     let result;
     if (row.kind === 'codex') {
       result = await runCodexQueue({ executable: process.env.SEATWIRE_CODEX || 'codex', codexHome: target.home, thread: target.session, message: body, timeoutMs: 5000 });
@@ -21,3 +22,5 @@ export async function tick(store) {
   } catch(e) { store.finish(row,e.message); }
   return true;
 }
+
+function shellQuote(value) { return "'" + value.replaceAll("'", "'\"'\"'") + "'"; }

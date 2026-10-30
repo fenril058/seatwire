@@ -21,7 +21,7 @@ cleanup() {
 }
 trap cleanup EXIT
 expr='let
- f = builtins.getFlake (builtins.getEnv "SEATWIRE_SOURCE");
+ f = builtins.getFlake ("git+file://" + builtins.getEnv "SEATWIRE_SOURCE");
  pkgs = f.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
  enabled = builtins.getEnv "SEATWIRE_TEST_ENABLE" == "1";
  common = {
@@ -34,7 +34,8 @@ expr='let
  base = f.inputs.home-manager.lib.homeManagerConfiguration {
    inherit pkgs; modules = [ f.homeManagerModules.default common ];
  };
- in (f.inputs.home-manager.lib.homeManagerConfiguration {
+ in assert !(builtins.pathExists (f.outPath + "/.dev"));
+ (f.inputs.home-manager.lib.homeManagerConfiguration {
    inherit pkgs; modules = [ f.homeManagerModules.default common {
      systemd.user.services = pkgs.lib.mkForce (if enabled then {
        ${builtins.getEnv "SEATWIRE_TEST_UNIT"} = base.config.systemd.user.services.seatwire;
