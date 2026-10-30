@@ -1,12 +1,12 @@
 import { runCodexQueue } from '../vendor/agmsg/codex-queue-io.mjs';
 import { sendClaudeCodeMessage, latestPermissionMode } from '../vendor/agmsg/claude-code-queue-io.mjs';
-import { alive, socketWitness } from './identity.mjs';
+import { socketWitness } from './identity.mjs';
 export async function tick(store) {
   const row = store.claim();
   if (!row) return false;
   try {
     const target = JSON.parse(row.target);
-    if (!alive(target)) throw Error('session process expired');
+    if (!store.targetAlive(row.team,row.name,target)) throw Error('session process expired');
     const body = `[seatwire:${row.generation}:${row.upto}] New messages. Run seatwire --team ${row.team} --name ${row.name} inbox.`;
     let result;
     if (row.kind === 'codex') {

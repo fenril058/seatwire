@@ -7,7 +7,8 @@ Node.js 24 の組み込み SQLite を使い、実行コードと永続データ�
 現状は初期実装です。
 送受信・既読・並行アクセス・通知 I/O・tmux 操作・Home Manager の撤去を自動テストしています。
 実機では Codex の送信を受けて Claude が通知に反応し、既読・返信するところまで確認しました。
-Codex 側の通知先登録は未解決で、双方向の実機通知は未検証のため P0 は未完了です。
+Codex のサンドボックスからホスト祖先を探せなかった問題に対し、spawn 管理下ではフックの登録申請をホスト側で検証する方式に変更しました。
+この方式の結合テストは通りましたが、変更後の双方向実機通知は未検証のため P0 は未完了です。
 詳細は [検証記録](docs/VALIDATION.md) を参照してください。
 
 ## ビルド
@@ -76,7 +77,9 @@ systemctl --user status seatwire
 seatwire status
 ```
 
-セッション開始フックがセッション ID と通知先を登録します。
+手動起動したセッションでは、セッション開始フックがセッション ID・祖先プロセス・通知先を検証して登録します。
+この経路ではホスト祖先を参照できないサンドボックス内からの登録は失敗します。
+`spawn` 管理下の登録は、後述するホスト照合の経路を使います。
 名前はチーム内で一意で、別の生存セッションによる上書きを拒否します。
 Codex の `actas --kind codex` は実行環境の `CODEX_THREAD_ID` とエージェント祖先を確認できる場合に利用できます。
 Claude は SessionStart 入力の session_id と環境の messaging socket/token を使います。
@@ -120,6 +123,8 @@ seatwire doctor
 ```sh
 seatwire --team demo spawn codex reviewer --boot-prompt '変更差分をレビューして'
 seatwire --team demo spawn claude-code implementer
+# ホストによる通知先登録まで待つ（最大 30 秒）:
+seatwire --team demo spawn codex auditor --wait-ready --ready-timeout 30000
 seatwire --team demo despawn reviewer
 seatwire --team demo despawn reviewer --force
 # 正確な既存セッション UUID を指定して再開:
@@ -130,6 +135,16 @@ seatwire --team demo spawn codex reviewer --resume SESSION_UUID
 専用サーバーのため、既存の tmux セッションを使いません。
 各エージェントの信頼確認・ログイン・権限確認は接続先の画面で行います。
 起動成功はフック登録やモデルの処理開始を意味しません。
+`--wait-ready` はフックの申請をホストが検証して通知先に登録するまで待ちます。
+通知の受信やモデルの反応を確認する機能ではありません。
+タイムアウト時もエージェントは残るため、`seatwire status` の `registration` と `error`、tmux 内の信頼確認を確認してください。
+信頼確認には別の端末から tmux に接続できます。
+
+spawn は DB に起動を予約してコミットしてから tmux を呼び出すため、起動中のフックによる書き込みをロックしません。
+フックは起動 ID とセッション ID を DB に申請し、ホストの daemon または `--wait-ready` が専用 tmux サーバーとエージェントのプロセス開始情報を照合します。
+フック自身がホストの親プロセスを探す必要はありません。
+別の起動 ID、プロセス開始情報、ソケットに変わっていれば登録を拒否します。
+起動途中で CLI が終了した場合、`status` に `abandoned` が表示され、`despawn` で同じ起動と確認できたものだけを整理できます。
 
 通常の despawn は Ctrl-C を送り、終了未確認であることを返します。
 自動的な強制終了は行いません。
@@ -157,6 +172,10 @@ SQLite は `$XDG_STATE_HOME/seatwire/messages.sqlite3`、未設定時は `~/.loc
 実行中の DB の単一ファイルコピーは避け、SQLite backup API または停止後のコピーを使ってください。
 Nix のロールバックは DB を巻き戻しません。
 未対応の schema version は変更せずエラーにします。
+現在の schema 2 は schema 1 から登録申請テーブルを追加して自動移行します。
+schema 1 の旧バイナリへ戻すと起動を拒否するため、ロールバック時は対応バイナリまたは移行前のバックアップが必要です。
+`--state-home /absolute/path` で、環境変数に依存せず状態の基準ディレクトリを指定できます。
+DB はその下の `seatwire/messages.sqlite3` に配置され、spawn の子プロセスとフックにも同じ基準ディレクトリを渡します。
 
 ## 設計・出典・候補名
 

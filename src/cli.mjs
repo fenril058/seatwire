@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { Store, statePath } from './store.mjs';
+import { Store } from './store.mjs';
 import { ancestor, witness, socketWitness } from './identity.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launch, despawn, launchStatus } from './spawn.mjs';
+import { submitRegistration, reconcileRegistrations, waitReady } from './registration.mjs';
 import { tick } from './notify.mjs';
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 function absolute(v) { if (!isAbsolute(v || '') || /[\x00-\x1f]/.test(v)) throw Error('invalid absolute path'); return v; }
@@ -29,7 +30,7 @@ export function registration(kind, input={}, env=process.env) {
   return target;
 }
 async function main() {
-  const {values:v,positionals:p}=parseArgs({allowPositionals:true,options:{team:{type:'string'},name:{type:'string'},to:{type:'string'},kind:{type:'string'},help:{type:'boolean'},once:{type:'boolean'},force:{type:'boolean'},'boot-prompt':{type:'string'},resume:{type:'string'}}});
+  const {values:v,positionals:p}=parseArgs({allowPositionals:true,options:{team:{type:'string'},name:{type:'string'},to:{type:'string'},kind:{type:'string'},help:{type:'boolean'},once:{type:'boolean'},force:{type:'boolean'},'boot-prompt':{type:'string'},resume:{type:'string'},'launch-id':{type:'string'},'state-home':{type:'string'},'wait-ready':{type:'boolean'},'ready-timeout':{type:'string'}}});
   const team=v.team || process.env.SEATWIRE_TEAM || 'default';
   const who=v.name || process.env.SEATWIRE_NAME;
   const command=p.shift();
@@ -44,20 +45,32 @@ history                         Show sent and received messages
 status                          List registrations and notification errors
 doctor                          Report runtime and integration capabilities
 daemon [--once]                 Run host notifications
-spawn KIND NAME [--boot-prompt TEXT] [--resume UUID]
+spawn KIND NAME [--boot-prompt TEXT] [--resume UUID] [--wait-ready] [--ready-timeout MS]
 despawn NAME [--force]           Interrupt or explicitly kill a managed session
+Use --state-home PATH to select an explicit XDG state base.
 Use SEATWIRE_TEAM and SEATWIRE_NAME for hook/session identity.`); return; }
-  const store=new Store();
+  const store=new Store(v['state-home'] ? join(absolute(v['state-home']),'seatwire') : undefined);
   try {
     let result;
     switch(command) {
-      case 'spawn': result=launch(store,team,p[1],p[0],{prompt:v['boot-prompt'],resume:v.resume,cli:fileURLToPath(import.meta.url)}); break;
+      case 'spawn': {
+        const timeout=Number(v['ready-timeout'] || 30000);
+        if (!Number.isSafeInteger(timeout) || timeout<1 || timeout>300000) throw Error('invalid ready timeout');
+        result=launch(store,team,p[1],p[0],{prompt:v['boot-prompt'],resume:v.resume,cli:fileURLToPath(import.meta.url)});
+        if (v['wait-ready']) { await waitReady(store,team,p[1],result.launchId,timeout); result.registration='ready'; }
+        break;
+      }
       case 'despawn': result=despawn(store,team,p[0],v.force); break;
       case 'register': store.register(team,who,v.kind); result={registered:who}; break;
       case 'actas': case 'hook': {
         if (!who && command==='hook') return;
         const input=command==='hook'?JSON.parse(readFileSync(0,'utf8')):{};
-        store.register(team,who,v.kind,registration(v.kind,input));
+        const launchId=v['launch-id'] || process.env.SEATWIRE_LAUNCH_ID;
+        if (command==='hook' && launchId) submitRegistration(store,team,who,v.kind,launchId,input);
+        else {
+          if (v['launch-id']) throw Error('launch-id is only accepted by SessionStart hook');
+          store.register(team,who,v.kind,registration(v.kind,input));
+        }
         if (command==='hook') { console.log(`seatwire: ${who}@${team}; run seatwire --team ${team} --name ${who} inbox.`); return; }
         result={registered:who}; break;
       }
@@ -65,11 +78,11 @@ Use SEATWIRE_TEAM and SEATWIRE_NAME for hook/session identity.`); return; }
       case 'inbox': case 'history': result=store.inbox(team,who,command==='history'); break;
       case 'ack': result={marked:store.ack(team,who,p.map(Number))}; break;
       case 'status': result={agents:store.status(),launches:launchStatus(store)}; break;
-      case 'doctor': result={node:process.version,state:statePath(),schema:1,agents:store.status(),codexQueue:spawnSync(process.env.SEATWIRE_CODEX || 'codex',['queue','--help'],{timeout:5000,encoding:'utf8'}).status===0,claudeVersion:spawnSync('claude',['--version'],{timeout:5000,encoding:'utf8'}).stdout?.trim() || 'unavailable',notice:'Transport success does not prove agent consumption; see docs/VALIDATION.md.'}; break;
+      case 'doctor': result={node:process.version,state:dirname(store.path),schema:2,agents:store.status(),codexQueue:spawnSync(process.env.SEATWIRE_CODEX || 'codex',['queue','--help'],{timeout:5000,encoding:'utf8'}).status===0,claudeVersion:spawnSync('claude',['--version'],{timeout:5000,encoding:'utf8'}).stdout?.trim() || 'unavailable',notice:'Transport success does not prove agent consumption; see docs/VALIDATION.md.'}; break;
       case 'daemon': {
         let stop=false;
         process.on('SIGTERM',()=>{stop=true;}); process.on('SIGINT',()=>{stop=true;});
-        do { const work=await tick(store); if(v.once) break; if(!work) await new Promise(r=>setTimeout(r,1000)); } while(!stop);
+        do { reconcileRegistrations(store); const work=await tick(store); if(v.once) break; if(!work) await new Promise(r=>setTimeout(r,1000)); } while(!stop);
         return;
       }
       default: throw Error(`unknown command: ${command}`);

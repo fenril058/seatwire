@@ -26,7 +26,7 @@ export class Store {
     this.db.exec('PRAGMA busy_timeout=5000');
     this.tx(() => {
       const version = this.db.prepare('PRAGMA user_version').get().user_version;
-      if (version !== 0 && version !== 1) throw Error(`unsupported schema ${version}; restore compatible binary or backup`);
+      if (![0, 1, 2].includes(version)) throw Error(`unsupported schema ${version}; restore compatible binary or backup`);
       if (!version) {
         if (this.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").get()) throw Error('unversioned database is not empty');
         this.db.exec(`
@@ -42,14 +42,24 @@ export class Store {
           PRAGMA user_version=1;
         `);
       }
+      if (version < 2) this.db.exec(`
+        CREATE TABLE pending_registrations(launch_id TEXT PRIMARY KEY, team TEXT NOT NULL,
+          name TEXT NOT NULL, payload TEXT NOT NULL, error TEXT, created INTEGER NOT NULL);
+        PRAGMA user_version=2;
+      `);
     });
     this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
   }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const v = fn(); this.db.exec('COMMIT'); return v; } catch(e) { this.db.exec('ROLLBACK'); throw e; } }
-  register(team, who, kind, target = null) {
+  register(team, who, kind, target = null, expected = null) {
     name(team); name(who);
     if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
     return this.tx(() => {
+      if (expected) {
+        const launch = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
+        const request = this.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(target.launchId);
+        if (launch?.record !== expected.record || request?.payload !== expected.payload) throw Error('registration request changed');
+      }
       const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
       const previous = old?.target && JSON.parse(old.target);
       if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
@@ -57,6 +67,7 @@ export class Store {
       this.db.prepare(`INSERT INTO agents(team,name,kind,target,generation) VALUES(?,?,?,?,?)
         ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
         notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
+      if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
     });
   }
   send(team, from, to, body) {
@@ -91,8 +102,17 @@ export class Store {
       failures=CASE WHEN ? IS NULL THEN 0 ELSE failures+1 END,error=?,retry_at=?,lease=NULL,lease_until=0
       WHERE team=? AND name=? AND generation=? AND lease=?`).run(error,row.upto,error,error,error?Date.now()+Math.min(60000,1000*2**Math.min(row.failures,6)):0,row.team,row.name,row.generation,row.lease);
   }
+  targetAlive(team, who, target) {
+    if (!alive(target)) return false;
+    if (!target.launchId) return true;
+    const row = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
+    if (!row) return false;
+    const launch = JSON.parse(row.record);
+    return launch.id === target.launchId && launch.phase === 'running' && alive(launch)
+      && launch.agent?.witness === target.witness && launch.agent?.pid === target.pid;
+  }
   status() {
-    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures FROM agents').all().map(({target,...r})=>({...r,online:target?alive(JSON.parse(target)):false}));
+    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures FROM agents').all().map(({target,...r})=>({...r,online:target?this.targetAlive(r.team,r.name,JSON.parse(target)):false}));
   }
   close(){ this.db.close(); }
 }

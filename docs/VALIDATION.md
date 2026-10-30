@@ -8,7 +8,7 @@ Tests ran on x86_64-linux; aarch64-linux and WSL have not been exercised.
 
 ## Automated evidence
 
-`node --test tests/*.test.mjs` passed 12 tests.
+The initial implementation passed 12 tests; the managed-registration revision passes 19 tests.
 Coverage includes offline round trips, explicit read receipts, namespace isolation, 12 concurrent CLI writers, private permissions, symlink rejection, future-schema refusal, live-owner conflicts, lease recovery and generation fencing.
 A real Unix socket server observed the auth line and inbox instruction without the message body, while the DB stayed unread.
 The server is a test fixture, not Claude Code.
@@ -24,6 +24,18 @@ The checks include the package tests and Home Manager activation package evaluat
 `bash tests/home-manager.sh` passed actual activation in a fresh temporary HOME, repeated activation, disable/removal, retained DB and re-enable/readback.
 The executable used during activation lives in the read-only Nix store.
 The isolated activation deliberately disables systemd service starts; actual running-unit stop/reload is not established by this test.
+
+## Managed-registration revision
+
+The spawn lock regression failed before the fix with SQLite reporting a locked database and passed after moving tmux outside the write transaction.
+The test directly observes a separate startup process writing the reserved agent row before tmux returns.
+A child-state regression likewise failed with the real user state directory instead of the requested test directory, then passed after forwarding the selected state base.
+
+Managed hook submission now records the exact SessionStart UUID without consulting ancestors.
+A fixture executes the actual generated hook command, and CLI spawn --wait-ready returns ready after host verification.
+Tests reject replaced launch IDs, different session IDs and replaced sockets without publishing a target or killing the unrelated server.
+They also cover duplicate registration without resetting generation, readiness timeout with a surviving process, abandoned-launch cleanup and schema 1 data preservation during migration to schema 2.
+These tests use stand-in agents, not live Codex or Claude sessions.
 
 ## Live agents
 
@@ -56,7 +68,8 @@ Previously approved trust decisions were not removed or broadened during cleanup
 
 1. Build and activate the module, enable the chosen hook integration, and review the hook in each agent's own UI.
 2. Create offline mailboxes `claude` and `codex` in a test team using `register`.
-3. Start the host daemon and launch each agent with explicit SEATWIRE_TEAM and SEATWIRE_NAME, or use spawn.
+3. Start the host daemon and use spawn with --wait-ready and a sufficient --ready-timeout; review each exact generated hook in the agent UI from another terminal.
+   Manual launch with explicit SEATWIRE_TEAM and SEATWIRE_NAME still uses the ancestor-dependent registration path.
 4. Confirm `status` shows both online without errors; do not infer registration from process startup alone.
 5. In Claude, send a unique marker to Codex using the CLI.
 6. Without entering another user prompt into Codex, observe whether the notification causes an inbox read, then acknowledge the exact ID and reply with a different marker.
@@ -73,7 +86,9 @@ Claude socket wire format and Codex queue output are version-dependent internal 
 There is no automatic fallback to terminal prompt injection.
 Notification attempts are serialized with bounded leases but cannot provide exactly-once delivery across ambiguous external I/O failures.
 A paused worker exceeding its lease can race a later worker; no exactly-once guarantee is made.
-Registration requires a recognizable local agent ancestor and authoritative UUID; remote/shared-server arrangements may be rejected.
+Non-managed registration still requires a recognizable local agent ancestor and authoritative UUID.
+Managed spawn uses host-verified launch metadata instead; that revision has not yet been verified with live model sessions.
+Remote/shared-server arrangements may be rejected.
 Resuming and Claude permission-mode behavior need live-agent validation.
 Normal despawn requests interruption, not confirmed graceful exit.
 There is no agent process restart supervisor, remote messaging, or advanced role orchestration.
