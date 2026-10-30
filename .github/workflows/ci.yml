@@ -21,3 +21,11 @@ jobs:
         run: nix flake check --print-build-logs
       - name: Activate, disable and reinstall in an isolated HOME
         run: bash tests/home-manager.sh
+      - name: Prepare the runner's systemd user manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          echo "XDG_RUNTIME_DIR=/run/user/$(id -u)" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus" >> "$GITHUB_ENV"
+      - name: Stop a running worker on Home Manager disable and preserve agent and DB
+        run: bash tests/home-manager-systemd.sh

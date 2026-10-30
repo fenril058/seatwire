@@ -23,7 +23,7 @@ The new process test directly asserts that the identified PID is the nearest Cod
 The checks include the package tests and Home Manager activation package evaluation/build.
 `bash tests/home-manager.sh` passed actual activation in a fresh temporary HOME, repeated activation, disable/removal, retained DB and re-enable/readback.
 The executable used during activation lives in the read-only Nix store.
-The isolated activation deliberately disables systemd service starts; actual running-unit stop/reload is not established by this test.
+The isolated activation deliberately disables systemd service starts; the separate running-service test described below covers activation-driven stop/reload.
 
 ## Managed-registration revision
 
@@ -36,6 +36,19 @@ A fixture executes the actual generated hook command, and CLI spawn --wait-ready
 Tests reject replaced launch IDs, different session IDs and replaced sockets without publishing a target or killing the unrelated server.
 They also cover duplicate registration without resetting generation, readiness timeout with a surviving process, abandoned-launch cleanup and schema 1 data preservation during migration to schema 2.
 These tests use stand-in agents, not live Codex or Claude sessions.
+
+`bash tests/home-manager-systemd.sh` passed with the host's actual systemd user manager.
+It uses a temporary HOME and a unique unit name with the module's generated service definition.
+The harness copies the generated unit unchanged and creates a runtime-only link so the existing manager can discover the isolated configuration.
+Home Manager activation itself starts and stops the worker with startServices enabled.
+Assertions check repeated activation, stopped worker PID on disable, removed managed unit path, retained message data, surviving managed agent, successful re-enable/readback and a second stop.
+The harness removes its runtime link and stops its stand-in agent on exit.
+This verifies the module's service lifecycle on this Linux host, not a WSL installation or a full desktop configuration migration.
+
+GitHub Actions now runs flake checks, isolated activation and the running-service lifecycle test on Ubuntu 24.04.
+The workflow is configured locally; no successful GitHub-hosted run is claimed before it is pushed and executed.
+The workflow also passes actionlint from the pinned nixpkgs input.
+No live model credentials or automatic hook trust are used in CI.
 
 ## Live agents
 

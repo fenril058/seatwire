@@ -177,6 +177,18 @@ schema 1 の旧バイナリへ戻すと起動を拒否するため、ロール�
 `--state-home /absolute/path` で、環境変数に依存せず状態の基準ディレクトリを指定できます。
 DB はその下の `seatwire/messages.sqlite3` に配置され、spawn の子プロセスとフックにも同じ基準ディレクトリを渡します。
 
+## 自動検証と WSL
+
+GitHub Actions は固定した Nix 入力で `nix flake check`、一時 HOME の導入・撤去・再導入、稼働中のユーザーサービスの停止を検証します。
+サービス検証は `bash tests/home-manager-systemd.sh` で実行でき、稼働中の systemd ユーザーマネージャーが必要です。
+既存サービスとの衝突を避けるため、一意な名前と一時 HOME でモジュールのユニット定義を検証し、終了時にテスト用リンクを撤去します。
+実エージェントの認証・フック信頼・モデル応答は CI の対象に含みません。
+
+WSL でも通知用ユーザーサービスには動作中の systemd が必要です。
+`systemctl --user is-active default.target` で確認できます。
+利用できない環境ではホストで `seatwire daemon` を実行してください。
+WSL 自体での実機検証は未実施です。
+
 ## 設計・出典・候補名
 
 [ARCHITECTURE.md](ARCHITECTURE.md) に言語選定と状態管理、[THIRD_PARTY.md](THIRD_PARTY.md) に再利用コードの出典を記録しています。
