@@ -35,7 +35,9 @@ export function currentIdentity(store, {team, who, env = process.env, required =
     }
     candidates = candidates.filter(row => witnesses.get(row.kind) === JSON.parse(row.target).witness);
   }
-  candidates = candidates.filter(row => store.targetAlive(row.team, row.name, JSON.parse(row.target)));
+  // Mailbox access uses the authoritative UUID even when host PIDs are hidden.
+  // Delivery liveness remains the host notification worker's responsibility.
+  if (!sessions.length) candidates = candidates.filter(row => store.targetAlive(row.team, row.name, JSON.parse(row.target)));
   if (!candidates.length && !required) return null;
   if (candidates.length !== 1) throw Error(candidates.length
     ? 'ambiguous session identity; select --team and --name'

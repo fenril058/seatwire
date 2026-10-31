@@ -117,8 +117,9 @@ The runtime dependency set remains Node.js and, for spawn, tmux; no helper serve
 
 `context.mjs` resolves authoritative session metadata and delegates process identity to `identity.mjs`.
 SessionStart without an assigned role registers KIND-UUID in the default team.
-Commands resolve a registered live session using an environment UUID, falling back to a verified ancestor only when no UUID was supplied.
-Ambiguous or stale matches fail instead of selecting the latest session.
+Commands resolve the durable mailbox using an authoritative environment UUID, falling back to a verified live ancestor only when no UUID was supplied.
+An exact UUID does not require the host process to be visible from the caller namespace.
+Ambiguous and unknown UUIDs fail instead of selecting the latest session.
 Peers expose project, kind, name and liveness, never transport credentials.
 Project matching uses canonical directories, without Git or shell dependencies.
 Explicit offline identities continue to work.
@@ -131,3 +132,35 @@ Runtime validation protects session metadata and received-message IDs; this revi
 The default runtime remains the pinned Node.js 24.
 The additional node26 flake check runs the same suite with pinned Node.js 26.12.1.
 That version predates the 26.13.0 LTS transition, so switching the default requires a newer pinned input and live adapter verification.
+
+## Collaboration responsibilities
+
+| Responsibility | Current implementation | Boundary |
+| --- | --- | --- |
+| Messaging Core | Store message, reply, receipt and lease operations | Persists mail independently of terminal processes |
+| Agent Adapter | SessionStart metadata in cli/registration, vendored queue/socket I/O | Translates agent-specific identity and delivery contracts |
+| Session Runtime | identity, spawn, host registration reconciliation | Verifies process lifetime; tmux is only the optional managed runtime |
+| Operator Interface | status, peers, doctor, retry, spawn/despawn | Reports unread counts, retry timing and failures without exposing credentials |
+
+These are responsibilities within the existing modules, not four new service processes.
+A future runtime may replace tmux without replacing message storage or agent transports.
+The current adapter registration code still lives partly in cli.mjs; extracting it is preferable to introducing a generic plugin framework when another adapter is actually needed.
+
+Mailbox identity and process availability are separate facts.
+The authoritative session UUID selects a durable mailbox even if the process has exited or is hidden by a PID namespace.
+This does not authorize a notification to a dead process: the host worker still checks the full process witness and socket identity before every delivery.
+New targets record their Linux PID namespace; peers/status return online=null when the caller cannot compare that namespace or the target is a shared Codex app-server, and peers retain these candidates with unknown availability.
+Old registrations lacking namespace metadata retain the previous liveness behavior until refreshed by a hook.
+
+An identical SessionStart target preserves notification progress and outstanding leases.
+A changed target on resume starts a new generation, preserving messages while fencing old completion writes.
+The retry operation resets notification progress only, refuses a currently leased delivery, and leaves messages and receipts unchanged.
+It can repeat a notification whose external acceptance was ambiguous; exactly-once delivery is still not guaranteed.
+
+The inspected agmsg revision remains 7082fc03f3a6e3f8d5375bb07bec6b39a674a79b.
+Its Codex SessionStart adapter explicitly separates hook identity from sandboxed tool-shell identity and avoids assigning one shared daemon PID to an arbitrary seat when several candidates exist.
+seatwire similarly avoids guessing a process or newest transcript, while retaining its own SQLite data and declarative Nix integration.
+
+A live shared Codex app-server does not prove an individual thread has an attached UI or can immediately run a model turn.
+The host may still queue to that exact thread UUID, but availability is reported as unknown and read receipts remain the evidence of processing.
+Runtime process verification is intentionally separate from per-session availability; a future supported agent API can refine the latter without changing message semantics.

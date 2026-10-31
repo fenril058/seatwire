@@ -22,3 +22,9 @@ Never infer a session from a recent transcript or another agent's process.
 A sandbox must permit access to the seatwire state directory; do not weaken sandbox policy automatically.
 If a notification includes `--state-home`, retain that option for subsequent operations on those messages.
 Run `seatwire doctor` to inspect notification capabilities and failures.
+
+An exact registered session UUID identifies the durable mailbox even when the sandbox cannot see host PIDs.
+In peers/status, online=null means availability cannot be determined in this PID namespace or from a shared Codex app-server; it does not mean offline.
+If actas cannot identify an ancestor, use the trusted SessionStart registration path instead of guessing a PID.
+For stalled notifications, inspect status unread/error/retry_at/lease_until on the host.
+After resolving the cause, retry NAME schedules unread notifications again without altering receipts; it refuses an active delivery lease.

@@ -23,7 +23,7 @@ test('automatic identity uses authoritative UUID and rejects conflicting metadat
   assert.throws(()=>sessionId('claude-code',{},{}),/authoritative/);
   assert.throws(()=>automaticName('unknown',session),/unknown/);
 });
-test('identity resolves existing custom teams, refuses ambiguity and expired processes',t=>{
+test('identity resolves custom teams, refuses ambiguity and retains offline mailbox access',t=>{
   const {store,session,target}=fixture(t);
   store.register('custom','reviewer','codex',target);
   const env={CODEX_THREAD_ID:session};
@@ -33,7 +33,7 @@ test('identity resolves existing custom teams, refuses ambiguity and expired pro
   assert.equal(currentIdentity(store,{env,team:'custom'}).team,'custom');
   assert.throws(()=>currentIdentity(store,{env:{CODEX_THREAD_ID:randomUUID()}}),/not registered/);
   store.db.prepare("UPDATE agents SET target=json_set(target,'$.witness','expired')").run();
-  assert.throws(()=>currentIdentity(store,{env}),/not registered/);
+  assert.equal(currentIdentity(store,{env,team:'custom'}).name,'reviewer');
 });
 test('discovery filters projects and dead peers without exposing transport credentials',t=>{
   const {store,target}=fixture(t);

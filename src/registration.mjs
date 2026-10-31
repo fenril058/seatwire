@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from 'node:path';
-import { name, alive, socketWitness } from './identity.mjs';
+import { name, alive, socketWitness, pidNamespace } from './identity.mjs';
 import { readLaunch, observeServer } from './spawn.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -50,7 +50,7 @@ export function reconcileRegistrations(store) {
       observeServer(launch); // External I/O stays outside SQLite transactions.
       const payload = JSON.parse(request.payload);
       if (resolve(payload.project) !== resolve(launch.project)) throw Error('session project mismatch');
-      const target = { ...payload, ...launch.agent, launchId: launch.id };
+      const target = { ...payload, ...launch.agent, pidNamespace:pidNamespace(), launchId: launch.id };
       if (launch.kind === 'codex') target.home = absolute(launch.home);
       else target.socketWitness = socketWitness(target.socket);
       store.register(request.team,request.name,launch.kind,target,{record:row.record,payload:request.payload});

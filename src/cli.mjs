@@ -5,7 +5,7 @@ import { isAbsolute, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { Store } from './store.mjs';
-import { ancestor, witness, socketWitness } from './identity.mjs';
+import { ancestor, witness, socketWitness, pidNamespace } from './identity.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launch, despawn, launchStatus } from './spawn.mjs';
 import { submitRegistration, reconcileRegistrations, waitReady } from './registration.mjs';
@@ -16,7 +16,7 @@ export function registration(kind, input={}, env=process.env) {
   if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
   const session = sessionId(kind, input, env);
   const pid = ancestor(kind);
-  const target = { session,pid,witness:witness(pid),project:projectPath(absolute(input.cwd || process.cwd())) };
+  const target = { session,pid,witness:witness(pid),pidNamespace:pidNamespace(),project:projectPath(absolute(input.cwd || process.cwd())) };
   if (kind==='codex') target.home=absolute(env.CODEX_HOME || join(homedir(),'.codex'));
   else {
     target.socket=absolute((env.CLAUDE_CODE_MESSAGING_SOCKET || '').replace(/^uds:/,''));
@@ -43,7 +43,8 @@ send --to AGENT MESSAGE          Persist a message
 inbox                           Show unread messages without marking read
 ack ID...                       Mark explicit received IDs read
 history                         Show sent and received messages
-status                          List registrations and notification errors
+retry NAME                      Retry unread notifications after fixing the cause
+status                          List registrations, unread counts and notification errors
 doctor                          Report runtime and integration capabilities
 daemon [--once]                 Run host notifications
 spawn KIND NAME [--boot-prompt TEXT] [--resume UUID] [--wait-ready] [--ready-timeout MS]
@@ -57,7 +58,7 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
       const identity = currentIdentity(store, {team, who});
       team = identity.team; who = identity.name;
     }
-    if (!team && ['peers','spawn','despawn'].includes(command)) team = currentIdentity(store, {who, required:false})?.team;
+    if (!team && ['peers','spawn','despawn','retry'].includes(command)) team = currentIdentity(store, {who, required:false})?.team;
     team ||= 'default';
     switch(command) {
       case 'spawn': {
@@ -87,6 +88,7 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
       case 'send': result={id:store.send(team,who,v.to,p.join(' '))}; break;
       case 'inbox': case 'history': result=store.inbox(team,who,command==='history'); break;
       case 'ack': result={marked:store.ack(team,who,p.map(Number))}; break;
+      case 'retry': result=store.retry(team,p[0]); break;
       case 'status': result={agents:store.status(),launches:launchStatus(store)}; break;
       case 'doctor': result={node:process.version,state:dirname(store.path),schema:2,agents:store.status(),codexQueue:spawnSync(process.env.SEATWIRE_CODEX || 'codex',['queue','--help'],{timeout:5000,encoding:'utf8'}).status===0,claudeVersion:spawnSync('claude',['--version'],{timeout:5000,encoding:'utf8'}).stdout?.trim() || 'unavailable',notice:'Transport success does not prove agent consumption; see docs/VALIDATION.md.'}; break;
       case 'daemon': {

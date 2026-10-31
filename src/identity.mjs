@@ -1,4 +1,4 @@
-import { readFileSync, lstatSync } from 'node:fs';
+import { readFileSync, lstatSync, readlinkSync } from 'node:fs';
 export function name(value) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value ?? '')) throw Error('invalid team/agent name');
   return value;
@@ -26,4 +26,16 @@ export function socketWitness(path) {
   const s = lstatSync(path);
   if (!s.isSocket() || s.uid !== process.getuid()) throw Error('socket ownership/type mismatch');
   return `${s.dev}:${s.ino}`;
+}
+
+export function pidNamespace() {
+  try { return readlinkSync('/proc/self/ns/pid'); } catch { return null; }
+}
+
+// A shared server's lifetime is not evidence that one of its sessions is active.
+export function sharedCodexProcess(pid) {
+  try {
+    const [executable, command] = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0');
+    return /(^|\/)codex$/.test(executable) && command === 'app-server';
+  } catch { return null; }
 }

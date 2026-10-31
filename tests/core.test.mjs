@@ -51,7 +51,7 @@ test('lease exclusion, crash recovery, session generation fencing',t=>{
   const next=s.claim(); assert.ok(next);s.finish(first,null);
   assert.equal(s.status().find(r=>r.name==='bob').notified,0);
   s.finish(next,null);assert.equal(s.claim(),null);
-  s.register('test','bob','codex',target);
+  s.register('test','bob','codex',{...target,project:'/resumed-project'});
   s.finish(next,null);assert.equal(s.status().find(r=>r.name==='bob').notified,0);
 });
 test('real Unix socket receives a nudge, no body; no duplicate on next poll',async t=>{
@@ -63,6 +63,7 @@ test('real Unix socket receives a nudge, no body; no duplicate on next poll',asy
   await tick(s);await new Promise(r=>setTimeout(r,20));
   assert.ok(chunks.join('').includes('seatwire --team test --name alice'));
   assert.ok(chunks.join('').includes("--state-home '" + dir + "' inbox"));
+  assert.ok(chunks.join('').includes('ack ID'));
   assert.ok(chunks.join('').includes('test-token'));
   assert.ok(!chunks.join('').includes('SECRET BODY'));
   assert.equal(await tick(s),false); assert.equal(s.inbox('test','alice').length,1);

@@ -72,7 +72,8 @@ Automatic approval review rejected trusting the changed definition, and the user
 The matcher change was reverted.
 The cause of the Codex SessionStart failure remains unresolved; do not treat the matcher hypothesis as a confirmed diagnosis.
 `codex queue --help` confirms the CLI capability, not live delivery.
-There is no verified real-agent notification round trip, so P0 is not complete.
+At that earlier stage there was no verified real-agent notification round trip.
+The later ordinary-session experiments below supersede this result for their explicitly tested paths.
 
 The notification worker also ran as the dedicated transient user systemd unit `seatwire-validation-20261029.service` and was observed active.
 On cleanup, it was stopped and collected: LoadState=not-found, ActiveState=inactive.
@@ -140,7 +141,7 @@ The official release table lists Node.js 26 as LTS: https://nodejs.org/en/about/
 
 The automated tests, isolated Home Manager activation and real Claude mailbox exchange in this revision ran on WSL2 Ubuntu.
 Native Windows execution remains unverified.
-An idle-session notification round trip remains unverified on this WSL2 host.
+At this earlier revision an idle-session notification round trip was still unverified; see the later lifecycle experiments below.
 Non-managed registration still needs access to an authoritative lifecycle UUID and a verifiable host ancestor.
 Sessions whose sandbox hides host ancestry cannot register through actas; discovery never guesses an alternative process.
 Claude /clear can leave multiple same-process registrations; automatic ancestor-only lookup then requires explicit identity selection.
@@ -159,3 +160,79 @@ No source was uploaded to a remote cache by these commands.
 The corrected isolated Home Manager test passed again with the source-exclusion assertion enabled.
 The specific store source copied by the earlier run was deleted; the original local DB was retained.
 The running-systemd harness was updated to the same source selection but was not rerun in this revision.
+
+## Mailbox and lifecycle revision
+
+The current host remains WSL2 Ubuntu.
+The authoritative UUID regression failed before the fix because currentIdentity required the host PID to be visible even for an exact registered UUID.
+The duplicate SessionStart regression also failed before the fix: it changed generation and reset notification progress for an unchanged target.
+Both passed after separating mailbox lookup from host delivery liveness and making identical registration idempotent.
+Additional tests cover explicit notification retry, active-lease refusal, resumed-generation fencing, preserved receipts and unknown availability across PID namespaces.
+The x86_64-linux flake checks passed with 29 tests on both pinned Node.js 24 and 26, plus Home Manager generation.
+The running systemd activation harness was not rerun for this revision.
+
+A real normally launched Codex exec process emitted its thread.started UUID.
+The test harness registered that exact UUID and the process it had launched on the host, then seeded a synthetic message.
+Inside workspace-write sandboxing, Codex ran whoami, peers, inbox, reply and ack without team/name flags and returned seatwire-codex-sandbox-reply.
+The host observed the reply and the original message's read_at value.
+This proves registered mailbox use from the sandbox, not automatic SessionStart registration.
+The harness was separate from seatwire spawn and used no tmux.
+
+A real normally launched Claude Code stream-json print process registered through an invocation-only SessionStart hook.
+After the first model result, the harness kept stdin open and supplied no further user input.
+The host sent a synthetic mailbox message and ran one notification worker tick.
+Claude reacted to the native socket notification, replied seatwire-idle-reply and acknowledged the original message.
+After ending the process, the harness resumed the exact same UUID and repeated the idle notification experiment.
+Claude replied seatwire-resumed-reply and acknowledged the new message while retaining the two earlier messages.
+The host read and acknowledged both replies.
+These experiments used synthetic text only and did not send project source to the models.
+They verify this Claude Code 2.1.314 stream-json lifecycle; interactive-terminal Claude behavior is not inferred from them.
+
+Two Codex exec probes, with matcher="*" and with matcher omitted, produced SessionStart Completed but did not create the diagnostic hook output.
+A normally launched Codex 0.165.0 interactive UI then explicitly displayed Hooks need review and stated that untrusted hooks would not run.
+At that diagnostic stage no trust bypass or persisted trust change had been performed.
+The current official documentation explicitly supports matcher="*" as match-all, so removing it is not treated as a fix.
+See [Codex hooks](https://learn.chatgpt.com/docs/hooks) for per-definition trust and matcher semantics.
+Normal-launch hook execution and tool-shell sandbox visibility must therefore be diagnosed separately.
+
+After the user authorized continuation, the exact temporary registration/diagnostic hooks were reviewed and trusted through Codex's UI.
+The temporary test directory was also trusted for its project-local hook; unrelated hooks were left unchanged.
+The next launches reported Codex 0.166.0 and the current configured default model GPT-6.1-Sol.
+No update command or model override was issued by this test.
+The earlier GPT-6-Astra CLI attempt hit its usage limit; this was not an authentication failure.
+
+Trusted hooks still produced no marker immediately after startup or /clear, with session flags, project hooks.json and --no-daemon.
+After the first synthetic user input on 0.166.0 with --no-daemon, the project hook's entry marker and result file appeared, its seatwire exit status was zero, and the host observed the automatic mailbox registration.
+The hook reported the host PID namespace.
+Thus the earlier absence of an immediate marker did not prove that either source format or matcher was broken: hook execution was deferred until the first turn in this observed interactive path.
+The test uses the exact lifecycle UUID, not a recent transcript inference.
+The subsequent default-path resume experiment is recorded below.
+
+After the first response, the host sent a synthetic message through seatwire and ran its notification worker once.
+Codex's native queue triggered a new turn without a new terminal input, and the model read inbox, replied and acknowledged the message.
+A second real Claude session in the same working directory used peers to discover this Codex and sent seatwire-pair-request.
+Codex replied through seatwire, and the Claude socket notification triggered an inbox read.
+In the first paired run Claude omitted ack despite reading the reply; the DB remained unread, so the harness correctly timed out.
+The notification was revised to include an explicit handled-ID acknowledgement instruction, without automatically marking messages read.
+The socket-payload assertion failed before this revision and passed afterward.
+Repeating the paired run produced request ID 5 and reply ID 6 with non-null read_at values on both, without a new human input after the initial task.
+This round trip used ordinary Codex with --no-daemon and ordinary Claude stream-json print mode; it used neither seatwire spawn nor tmux.
+
+The Codex UI was then stopped, and message ID 7 was persisted while it was stopped.
+The same UUID was resumed with the default Codex invocation, omitting --no-daemon.
+After a short initial input and a host notification tick, Codex replied as ID 8 and acknowledged ID 7.
+The host read and acknowledged ID 8.
+Old messages and receipts were retained.
+The registered process in this default path was the shared codex app-server, confirmed by reading only its executable and first subcommand.
+After the UI exited the shared process remained alive, exposing a misleading online=true result.
+A regression with the same process argv shape failed before the display fix and passed afterward.
+Shared app-server targets now report online=null because process lifetime alone does not prove individual session availability.
+The shared server was not killed, since it can serve other sessions.
+
+Thirty host tests pass, including process, socket, queue, lease, duplicate-hook and namespace regressions.
+Model notification behavior is evidence for the versions, configuration and runs described here, not a guarantee of model compliance or exactly-once handling.
+Remaining unverified paths include native Windows, aarch64-linux, live managed-spawn round trips, simultaneous multiple UIs on one Codex thread, and immediate new-session startup with the shared daemon before its first turn.
+Shared-server per-session active-state detection remains unavailable; status explicitly reports uncertainty.
+The final x86_64-linux nix flake check passed with 30 tests on each pinned Node.js 24 and 26 runtime and successful Home Manager generation.
+All test UIs and Claude print processes were closed, and the temporary project hook definition was removed.
+Narrow trust records created by the authorized UI review were not manually rewritten; unrelated settings and the shared Codex server were left intact.

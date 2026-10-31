@@ -4,7 +4,7 @@ import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { projectPath } from './context.mjs';
-import { name, alive } from './identity.mjs';
+import { name, alive, pidNamespace, sharedCodexProcess } from './identity.mjs';
 export function statePath() {
   const base = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
   if (!isAbsolute(base)) throw Error('XDG_STATE_HOME must be absolute');
@@ -65,6 +65,10 @@ export class Store {
       const previous = old?.target && JSON.parse(old.target);
       if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
       if (target && this.db.prepare('SELECT name FROM agents WHERE team=? AND name<>? AND json_extract(target,\'$.session\')=?').get(team,who,target.session)) throw Error('session already assigned to another name');
+      if (target && old?.kind === kind && old.target === JSON.stringify(target)) {
+        if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
+        return;
+      }
       this.db.prepare(`INSERT INTO agents(team,name,kind,target,generation) VALUES(?,?,?,?,?)
         ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
         notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
@@ -91,8 +95,8 @@ export class Store {
     return this.db.prepare('SELECT team,name,kind,target,error FROM agents WHERE team=? ORDER BY name').all(team)
       .map(({target,...row}) => {
         const t = target && JSON.parse(target);
-        return {...row, project:t?.project || null, online:!!t && this.targetAlive(row.team,row.name,t)};
-      }).filter(row => all || (row.online && row.project && projectPath(row.project) === projectPath(project)));
+        return {...row, project:t?.project || null, online:t ? this.targetOnline(row.team,row.name,t) : false};
+      }).filter(row => all || (row.online !== false && row.project && projectPath(row.project) === projectPath(project)));
   }
   inbox(team, who, history=false) {
     name(team); name(who);
@@ -118,6 +122,23 @@ export class Store {
       failures=CASE WHEN ? IS NULL THEN 0 ELSE failures+1 END,error=?,retry_at=?,lease=NULL,lease_until=0
       WHERE team=? AND name=? AND generation=? AND lease=?`).run(error,row.upto,error,error,error?Date.now()+Math.min(60000,1000*2**Math.min(row.failures,6)):0,row.team,row.name,row.generation,row.lease);
   }
+  retry(team, who) {
+    name(team); name(who);
+    return this.tx(() => {
+      const row=this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
+      if (!row) throw Error('unregistered agent');
+      if (!row.target) throw Error('no notification target; register the session first');
+      if (row.lease && row.lease_until > Date.now()) throw Error('notification in progress; retry after its lease expires');
+      this.db.prepare('UPDATE agents SET notified=0,retry_at=0,failures=0,error=NULL,lease=NULL,lease_until=0,generation=? WHERE team=? AND name=?')
+        .run(randomUUID(),team,who);
+      return {team,name:who,state:'notification retry scheduled; unread messages unchanged'};
+    });
+  }
+  targetOnline(team, who, target) {
+    if (target.pidNamespace && target.pidNamespace !== pidNamespace()) return null;
+    if (!this.targetAlive(team,who,target)) return false;
+    return sharedCodexProcess(target.pid) === false ? true : null;
+  }
   targetAlive(team, who, target) {
     if (!alive(target)) return false;
     if (!target.launchId) return true;
@@ -128,7 +149,7 @@ export class Store {
       && launch.agent?.witness === target.witness && launch.agent?.pid === target.pid;
   }
   status() {
-    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures FROM agents').all().map(({target,...r})=>({...r,online:target?this.targetAlive(r.team,r.name,JSON.parse(target)):false}));
+    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures,retry_at,lease_until,(SELECT count(*) FROM messages m WHERE m.team=agents.team AND m.recipient=agents.name AND read_at IS NULL) AS unread FROM agents').all().map(({target,...r})=>({...r,online:target?this.targetOnline(r.team,r.name,JSON.parse(target)):false}));
   }
   close(){ this.db.close(); }
 }

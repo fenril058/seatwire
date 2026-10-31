@@ -8,7 +8,8 @@ export async function tick(store) {
   try {
     const target = JSON.parse(row.target);
     if (!store.targetAlive(row.team,row.name,target)) throw Error('session process expired');
-    const body = `[seatwire:${row.generation}:${row.upto}] New messages. Run seatwire --team ${row.team} --name ${row.name} --state-home ${shellQuote(dirname(dirname(store.path)))} inbox.`;
+    const command = `seatwire --team ${row.team} --name ${row.name} --state-home ${shellQuote(dirname(dirname(store.path)))}`;
+    const body = `[seatwire:${row.generation}:${row.upto}] New messages. Run ${command} inbox. After processing, acknowledge only handled message IDs with ${command} ack ID... . Reading or replying does not mark messages read.`;
     let result;
     if (row.kind === 'codex') {
       result = await runCodexQueue({ executable: process.env.SEATWIRE_CODEX || 'codex', codexHome: target.home, thread: target.session, message: body, timeoutMs: 5000 });
