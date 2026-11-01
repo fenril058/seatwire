@@ -8,6 +8,12 @@ in {
     package = lib.mkOption { type = lib.types.package; default = self.packages.${pkgs.stdenv.hostPlatform.system}.default; };
     integrateClaude = lib.mkEnableOption "merge seatwire SessionStart into Home Manager Claude settings";
     integrateCodex = lib.mkEnableOption "merge seatwire SessionStart into Home Manager Codex settings";
+    codexExecutable = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/opt/codex/bin/codex";
+      description = "Absolute path of the codex executable for the notification service (SEATWIRE_CODEX). Null searches the service PATH.";
+    };
   };
   config = lib.mkIf cfg.enable {
     assertions = [
@@ -15,6 +21,8 @@ in {
         message = "seatwire Claude integration requires enabled, immutable Home Manager settings."; }
       { assertion = !cfg.integrateCodex || (config.programs.codex.enable && !config.programs.codex.mutableSettings);
         message = "seatwire Codex integration requires enabled, immutable Home Manager settings."; }
+      { assertion = cfg.codexExecutable == null || lib.hasPrefix "/" cfg.codexExecutable;
+        message = "programs.seatwire.codexExecutable must be an absolute path."; }
     ];
     home.packages = [ cfg.package ];
     home.file.".claude/skills/seatwire".source = "${cfg.package}/share/seatwire/skills/seatwire";
@@ -32,7 +40,8 @@ in {
         ExecStart = "${cfg.package}/bin/seatwire daemon";
         Restart = "on-failure";
         UMask = "0077";
-        Environment = [ "PATH=${config.home.profileDirectory}/bin:/usr/bin:/bin" "XDG_STATE_HOME=${config.xdg.stateHome}" ];
+        Environment = [ "PATH=${config.home.profileDirectory}/bin:/usr/bin:/bin" "XDG_STATE_HOME=${config.xdg.stateHome}" ]
+          ++ lib.optional (cfg.codexExecutable != null) "SEATWIRE_CODEX=${cfg.codexExecutable}";
       };
     };
   };

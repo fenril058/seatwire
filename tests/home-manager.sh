@@ -18,6 +18,7 @@ expr='let
  programs.seatwire.enable = builtins.getEnv "SEATWIRE_TEST_ENABLE" == "1";
  programs.seatwire.integrateClaude = true;
  programs.seatwire.integrateCodex = true;
+ programs.seatwire.codexExecutable = "/opt/seatwire-test/bin/codex";
  programs.claude-code = { enable = true; package = null; settings.model = "sonnet"; };
  programs.codex = { enable = true; package = null; settings.model = "gpt-5"; };
  systemd.user.startServices = false;
@@ -36,6 +37,7 @@ activate "$on"
 test -L "$SEATWIRE_TEST_HOME/.claude/skills/seatwire"
 test -L "$SEATWIRE_TEST_HOME/.agents/skills/seatwire"
 test -f "$SEATWIRE_TEST_HOME/.config/systemd/user/seatwire.service"
+grep -qx 'Environment=SEATWIRE_CODEX=/opt/seatwire-test/bin/codex' "$SEATWIRE_TEST_HOME/.config/systemd/user/seatwire.service"
 grep -q SessionStart "$SEATWIRE_TEST_HOME/.claude/settings.json"
 grep -q SessionStart "$SEATWIRE_TEST_HOME/.codex/config.toml"
 export XDG_STATE_HOME="$SEATWIRE_TEST_HOME/.local/state"

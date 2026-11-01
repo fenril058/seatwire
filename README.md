@@ -116,7 +116,15 @@ Claude は SessionStart 入力の session_id と環境の messaging socket/token
 エージェントのサンドボックスから DB にアクセスできるよう、必要な場合は `$XDG_STATE_HOME/seatwire` を許可対象へ明示的に追加してください。
 seatwire はサンドボックス設定を緩和しません。
 通知サービスには Codex 実行ファイルが必要です。
-Home Manager のプロファイルに Codex を導入するか、サービスの `SEATWIRE_CODEX` 環境変数に絶対パスを指定してください。
+未設定時は、サービスの PATH（Home Manager のプロファイルの `bin`、`/usr/bin`、`/bin`）から `codex` を探します。
+それ以外の場所にある場合は、`programs.seatwire.codexExecutable` に絶対パスを指定してください。
+指定した値はサービスの `SEATWIRE_CODEX` 環境変数になります。
+
+```nix
+{
+  programs.seatwire.codexExecutable = "/opt/codex/bin/codex";
+}
+```
 
 ## メッセージング
 
