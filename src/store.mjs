@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, lstatSync } from 'node:fs';
+import { mkdirSync, lstatSync, existsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -14,15 +14,30 @@ function privatePath(path, directory) {
   const s = lstatSync(path);
   if (s.uid !== process.getuid() || (s.mode & 0o077) || !(directory ? s.isDirectory() : s.isFile())) throw Error(`unsafe state permissions/type: ${path}`);
 }
+// A sandbox write denial otherwise surfaces as ENOENT from recursive mkdir or a generic SQLite error.
+const SANDBOX_HINT = 'seatwire never changes sandbox settings; see README for granting access';
+function denied(message, cause) { return Object.assign(Error(message), { cause }); }
+// SQLITE_PERM, SQLITE_READONLY and SQLITE_CANTOPEN, including their extended codes.
+const sqliteAccessError = e => e?.code === 'ERR_SQLITE_ERROR' && [3, 8, 14].includes(e.errcode & 0xff);
 export class Store {
   constructor(dir = statePath()) {
     process.umask(0o077);
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch (e) {
+      if (existsSync(dir)) throw e;
+      throw denied(`cannot create state directory ${dir}: ${e.message}. If this runs in an agent sandbox, create it on the host first (for example with seatwire status) and allow the sandbox to write it; ${SANDBOX_HINT}`, e);
+    }
     privatePath(dir, true);
     this.path = join(dir, 'messages.sqlite3');
     for (const suffix of ['', '-wal', '-shm']) {
       try { privatePath(this.path + suffix, false); } catch (e) { if (e.code !== 'ENOENT') throw e; }
     }
+    try { this.open(); } catch (e) {
+      try { this.db?.close(); } catch { /* The original error explains the failure. */ }
+      if (!sqliteAccessError(e)) throw e;
+      throw denied(`cannot write state database ${this.path}: ${e.message}. If this runs in an agent sandbox, allow it to write ${dir}; ${SANDBOX_HINT}`, e);
+    }
+  }
+  open() {
     this.db = new DatabaseSync(this.path);
     this.db.exec('PRAGMA busy_timeout=5000');
     this.tx(() => {

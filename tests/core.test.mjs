@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync, chmodSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, chmodSync, symlinkSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -94,4 +94,20 @@ test('same PID with different session cannot replace a live registration',t=>{
   const {s}=fixture(t);const owner={pid:process.pid,witness:witness(process.pid),session:randomUUID()};
   s.register('test','bob','codex',owner);
   assert.throws(()=>s.register('test','bob','codex',{...owner,session:randomUUID()}),/live session/);
+});
+test('unwritable state names the directory and the sandbox instead of a bare I/O error',t=>{
+  if (process.getuid()===0) return t.skip('root bypasses directory permissions');
+  const dir=mkdtempSync(join(tmpdir(),'seatwire-denied-'));
+  const parent=join(dir,'readonly');mkdirSync(parent,{mode:0o500});
+  const state=join(dir,'seatwire');
+  t.after(()=>{chmodSync(parent,0o700);chmodSync(state,0o700);rmSync(dir,{recursive:true,force:true});});
+  // A missing directory that this process may not create, as in a read-only sandbox mount.
+  assert.throws(()=>new Store(join(parent,'seatwire')),e=>e.message.startsWith(`cannot create state directory ${join(parent,'seatwire')}:`)&&/agent sandbox/.test(e.message));
+  // An existing database whose directory cannot receive WAL files.
+  const s=new Store(state);s.register('test','alice','codex');s.close();
+  chmodSync(state,0o500);
+  assert.throws(()=>new Store(state),e=>e.message.startsWith(`cannot write state database ${join(state,'messages.sqlite3')}:`)&&/allow it to write/.test(e.message));
+  chmodSync(state,0o700);
+  const reopened=new Store(state);t.after(()=>reopened.close());
+  assert.equal(reopened.db.prepare('SELECT count(*) AS n FROM agents').get().n,1);
 });
