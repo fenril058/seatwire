@@ -16,7 +16,8 @@ expr='let
  home.homeDirectory = builtins.getEnv "SEATWIRE_TEST_HOME";
  home.stateVersion = "26.05";
  programs.seatwire.enable = builtins.getEnv "SEATWIRE_TEST_ENABLE" == "1";
- programs.seatwire.integrateClaude = true;
+ programs.seatwire.integrateClaude = builtins.getEnv "SEATWIRE_TEST_PLUGIN" != "1";
+ programs.seatwire.claudePlugin = builtins.getEnv "SEATWIRE_TEST_PLUGIN" != "";
  programs.seatwire.integrateCodex = true;
  programs.seatwire.codexExecutable = "/opt/seatwire-test/bin/codex";
  programs.claude-code = { enable = true; package = null; settings.model = "sonnet"; };
@@ -26,6 +27,13 @@ expr='let
  }).activationPackage'
 export SEATWIRE_TEST_ENABLE=1
 on="$(nix build --impure --no-link --print-out-paths --expr "$expr" --log-format raw)"
+export SEATWIRE_TEST_PLUGIN=1
+plugin="$(nix build --impure --no-link --print-out-paths --expr "$expr" --log-format raw)"
+# Both Claude hook installers at once must be rejected at evaluation.
+export SEATWIRE_TEST_PLUGIN=both
+if nix build --impure --no-link --expr "$expr" --log-format raw 2> "$test_root/both.log"; then exit 1; fi
+grep -q 'claudePlugin and integrateClaude both install' "$test_root/both.log"
+export SEATWIRE_TEST_PLUGIN=
 export SEATWIRE_TEST_ENABLE=0
 off="$(nix build --impure --no-link --print-out-paths --expr "$expr" --log-format raw)"
 activate() {
@@ -56,5 +64,25 @@ grep -q gpt-5 "$SEATWIRE_TEST_HOME/.codex/config.toml"
 test -f "$XDG_STATE_HOME/seatwire/messages.sqlite3"
 activate "$on"
 "$on/home-path/bin/seatwire" --name bob inbox | grep -q retained
-printf 'PASS: isolated Home Manager activation, repeat, disable, data retention, re-enable\n'
+activate "$plugin"
+skill_dir="$SEATWIRE_TEST_HOME/.claude/skills/seatwire"
+for file in .claude-plugin/plugin.json hooks/hooks.json SKILL.md; do
+  test -f "$skill_dir/$file"
+  test ! -L "$skill_dir/$file"
+done
+python3 - "$skill_dir" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+manifest = json.load(open(os.path.join(root, ".claude-plugin/plugin.json")))
+assert manifest["name"] == "seatwire", manifest
+hooks = json.load(open(os.path.join(root, "hooks/hooks.json")))["hooks"]["SessionStart"]
+command = hooks[0]["hooks"][0]["command"].split()
+assert command[1:] == ["hook", "--kind", "claude-code"], command
+assert os.access(command[0], os.X_OK), command
+PY
+! grep -q SessionStart "$SEATWIRE_TEST_HOME/.claude/settings.json"
+grep -q SessionStart "$SEATWIRE_TEST_HOME/.codex/config.toml"
+activate "$off"
+test ! -e "$skill_dir"
+printf 'PASS: isolated Home Manager activation, repeat, disable, data retention, re-enable, Claude plugin hook\n'
 printf 'User systemd start/stop was deliberately disabled in this isolated test.\n'

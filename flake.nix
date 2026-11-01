@@ -29,21 +29,24 @@
         };
       });
       homeManagerModules.default = import ./nix/home-manager.nix self;
-      checks = each (system: {
-        package = self.packages.${system}.default;
-        node26 = self.packages.${system}.default.overrideAttrs (_: {
-          nativeBuildInputs = with nixpkgs.legacyPackages.${system}; [ makeWrapper nodejs_26 tmux ];
-          # Compatibility check only; the pinned 26.12.1 predates the LTS release.
-        });
-        home-manager = (home-manager.lib.homeManagerConfiguration {
+      checks = each (system: let
+        hm = extra: (home-manager.lib.homeManagerConfiguration {
           pkgs = nixpkgs.legacyPackages.${system};
           modules = [ self.homeManagerModules.default {
             home.username = "seatwire-test";
             home.homeDirectory = "/tmp/seatwire-hm-test";
             home.stateVersion = "26.05";
             programs.seatwire.enable = true;
-          } ];
+          } extra ];
         }).activationPackage;
+      in {
+        package = self.packages.${system}.default;
+        node26 = self.packages.${system}.default.overrideAttrs (_: {
+          nativeBuildInputs = with nixpkgs.legacyPackages.${system}; [ makeWrapper nodejs_26 tmux ];
+          # Compatibility check only; the pinned 26.12.1 predates the LTS release.
+        });
+        home-manager = hm { };
+        home-manager-claude-plugin = hm { programs.seatwire.claudePlugin = true; };
       });
       devShells = each (system: { default = nixpkgs.legacyPackages.${system}.mkShell { packages = [ nixpkgs.legacyPackages.${system}.nodejs_24 ]; }; });
     };
