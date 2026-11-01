@@ -52,7 +52,7 @@ test('CLI discovers its identity, replies to sender, and leaves acknowledgement 
   store.register('default','sender','claude-code');
   const id=store.send('default','sender','receiver','question');
   const run=(...args)=>spawnSync(process.execPath,['src/cli.mjs','--state-home',dir,...args],{
-    encoding:'utf8',env:{...process.env,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CLAUDE_SESSION_ID:'',CODEX_THREAD_ID:session}});
+    encoding:'utf8',env:{...process.env,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CLAUDE_SESSION_ID:'',CLAUDE_CODE_SESSION_ID:'',CODEX_THREAD_ID:session}});
   const reply=run('reply',String(id),'answer');
   assert.equal(reply.status,0,reply.stderr);
   assert.equal(store.inbox('default','sender')[0].body,'answer');
@@ -69,10 +69,33 @@ test('ordinary SessionStart with no assigned name registers and descendant comma
     const hook=spawnSync(process.execPath,[${JSON.stringify(cli)},'hook','--kind','codex'],{input:JSON.stringify({session_id:${JSON.stringify(session)},cwd:process.cwd()}),encoding:'utf8'});
     const who=spawnSync(process.execPath,[${JSON.stringify(cli)},'whoami'],{encoding:'utf8'});
     console.log(JSON.stringify({hook:hook.status,who:who.status,identity:who.stdout,error:hook.stderr+who.stderr}));`;
-  const r=spawnSync(process.execPath,['--input-type=module','-e',script],{argv0:'codex',encoding:'utf8',env:{...process.env,XDG_STATE_HOME:dir,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CODEX_THREAD_ID:session,CLAUDE_SESSION_ID:''}});
+  const r=spawnSync(process.execPath,['--input-type=module','-e',script],{argv0:'codex',encoding:'utf8',env:{...process.env,XDG_STATE_HOME:dir,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CODEX_THREAD_ID:session,CLAUDE_SESSION_ID:'',CLAUDE_CODE_SESSION_ID:''}});
   assert.equal(r.status,0,r.stderr);
   const result=JSON.parse(r.stdout);
   assert.equal(result.hook,0,result.error); assert.equal(result.who,0,result.error);
   assert.equal(JSON.parse(result.identity).name,automaticName('codex',session));
   assert.equal(store.status().length,1);
+});
+test('Claude Code tool commands resolve the mailbox from CLAUDE_CODE_SESSION_ID',t=>{
+  const {store,dir,session,target}=fixture(t);
+  const name=automaticName('claude-code',session);
+  store.register('default',name,'claude-code',target);
+  assert.deepEqual(currentIdentity(store,{env:{CLAUDE_CODE_SESSION_ID:session}}),{team:'default',name});
+  const who=spawnSync(process.execPath,['src/cli.mjs','--state-home',dir,'whoami'],{encoding:'utf8',
+    env:{...process.env,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CODEX_THREAD_ID:'',CLAUDE_SESSION_ID:'',CLAUDE_CODE_SESSION_ID:session}});
+  assert.equal(who.status,0,who.stderr);
+  assert.equal(JSON.parse(who.stdout).name,name);
+  assert.equal(sessionId('claude-code',{},{CLAUDE_CODE_SESSION_ID:session}),session);
+  assert.throws(()=>sessionId('claude-code',{session_id:session},{CLAUDE_CODE_SESSION_ID:randomUUID()}),/conflicting/);
+});
+test('a nested agent with an inherited parent session UUID never resolves to the parent mailbox',t=>{
+  const {store,session:parent,target}=fixture(t);
+  store.register('default','parent','claude-code',target);
+  const child=randomUUID();
+  const env={CLAUDE_CODE_SESSION_ID:parent,CODEX_THREAD_ID:child};
+  assert.throws(()=>currentIdentity(store,{env}),/ambiguous/);
+  assert.throws(()=>currentIdentity(store,{env,required:false}),/ambiguous/);
+  store.register('default','child','codex',{...target,session:child});
+  assert.throws(()=>currentIdentity(store,{env}),/ambiguous/);
+  assert.equal(currentIdentity(store,{env:{CLAUDE_CODE_SESSION_ID:parent,CLAUDE_SESSION_ID:parent}}).name,'parent');
 });

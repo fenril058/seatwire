@@ -95,8 +95,12 @@ seatwire ack 1
 `peers --all` は同じチームの別ディレクトリとオフラインの宛先も表示します。
 ディレクトリはシンボリックリンクを解決して比較し、Git worktree 間を自動で同一視しません。
 `whoami` で現在の名前を確認できます。
-送受信時は登録済みのセッション ID、またはエージェント祖先から自分を特定します。
+送受信時は、環境変数のセッション ID（Codex は `CODEX_THREAD_ID`、Claude Code は `CLAUDE_CODE_SESSION_ID`）があれば、その ID で登録された受信箱だけを使います。
+環境変数がなければ、エージェント祖先から自分を特定します。
 複数候補があれば失敗し、チームや名前を明示するよう案内します。
+Claude の Bash から `codex exec` を起動した場合など、子が親のセッション ID を受け継ぐことがあります。
+異なるセッション ID が環境に複数あるときは、子が未登録でも親の受信箱を選ばずに失敗します。
+この場合も `--team` と `--name` を明示してください。
 従来の `SEATWIRE_TEAM` と `SEATWIRE_NAME` による役割指定も使えます。
 `reply` は自分が受信したメッセージだけを対象にし、既読にはしません。
 
@@ -106,6 +110,7 @@ seatwire ack 1
 名前はチーム内で一意で、別の生存セッションによる上書きを拒否します。
 Codex の `actas --kind codex` は実行環境の `CODEX_THREAD_ID` とエージェント祖先を確認できる場合に利用できます。
 Claude は SessionStart 入力の session_id と環境の messaging socket/token を使います。
+フックの環境に `CLAUDE_CODE_SESSION_ID` があれば、入力の session_id と一致することも確認します。
 推測したセッション ID では登録しません。
 
 エージェントのサンドボックスから DB にアクセスできるよう、必要な場合は `$XDG_STATE_HOME/seatwire` を許可対象へ明示的に追加してください。
