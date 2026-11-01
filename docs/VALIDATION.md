@@ -177,6 +177,8 @@ Inside workspace-write sandboxing, Codex ran whoami, peers, inbox, reply and ack
 The host observed the reply and the original message's read_at value.
 This proves registered mailbox use from the sandbox, not automatic SessionStart registration.
 The harness was separate from seatwire spawn and used no tmux.
+Its state directory was a temporary directory under /tmp, which was also Codex's working directory (-C), so it was writable inside the sandbox.
+It does not show access to the default `~/.local/state/seatwire`; see the phase 1 revision below.
 
 A real normally launched Claude Code stream-json print process registered through an invocation-only SessionStart hook.
 After the first model result, the harness kept stdin open and supplied no further user input.
@@ -236,3 +238,98 @@ Shared-server per-session active-state detection remains unavailable; status exp
 The final x86_64-linux nix flake check passed with 30 tests on each pinned Node.js 24 and 26 runtime and successful Home Manager generation.
 All test UIs and Claude print processes were closed, and the temporary project hook definition was removed.
 Narrow trust records created by the authorized UI review were not manually rewritten; unrelated settings and the shared Codex server were left intact.
+
+## Phase 1 revision (2026-11-01)
+
+The host remains WSL2 Ubuntu with Node.js 24.18.0, Claude Code 2.1.316 and Codex CLI 0.166.0.
+Claude Code had advanced from the 2.1.314 recorded above; this revision issued no update command.
+
+### Claude session UUID
+
+Verified on the host:
+
+- An interactive Claude Code session ran in a dedicated tmux server, with Claude and Codex session variables removed from its launch environment.
+- An invocation-only `--settings` SessionStart hook recorded its environment and input; persistent settings were not changed.
+- For the startup, clear, compact and resume sources, the hook environment's `CLAUDE_CODE_SESSION_ID` equaled the input session_id.
+- Bash-mode commands in that session observed `CLAUDE_CODE_SESSION_ID` as the current session before /clear, the new session after /clear, and the same session after /compact and `--resume`.
+- After /clear, a model-invoked Bash tool call to `printenv CLAUDE_CODE_SESSION_ID` also returned the new UUID.
+- `CLAUDE_SESSION_ID` was never set.
+- With the actual seatwire SessionStart hook and a temporary state directory, `whoami` from Bash mode resolved the new session's automatic mailbox after /clear.
+  The HEAD implementation (85dc36a) failed at the same point with `ambiguous session identity; select --team and --name`, because ancestor lookup matched both registrations of the same process.
+
+Nested launches, as observed:
+
+- A Claude Code started from this session's Bash tool inherited the parent's `CLAUDE_CODE_SESSION_ID` and a synthetic `CODEX_THREAD_ID`.
+  It replaced `CLAUDE_CODE_SESSION_ID` with its own UUID in the hook and Bash environments at startup and after /clear, but passed the inherited `CODEX_THREAD_ID` through unchanged.
+- A shell command run by `codex exec` started from this session's Bash tool saw its own `CODEX_THREAD_ID` and the parent's `CLAUDE_CODE_SESSION_ID`.
+  `CLAUDECODE`, `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` were also present; only their presence was printed.
+- `~/.codex/config.toml` contains no `shell_environment_policy` entry.
+- A default interactive codex started the same way, served by the shared app-server daemon, saw its own `CODEX_THREAD_ID` and none of these Claude variables.
+  The daemon process environment contains no `CLAUDE_*` names.
+  Inheritance therefore depends on which process spawns the tool shell, not only on `shell_environment_policy`.
+
+Commands now use `CLAUDE_CODE_SESSION_ID`, and still accept `CLAUDE_SESSION_ID` for compatibility.
+Several distinct session UUIDs in one environment fail as ambiguous before any lookup, even when only the parent is registered.
+The Claude hook path also compares `CLAUDE_CODE_SESSION_ID` with the input session_id.
+Two regression tests failed before the change and passed after it.
+One asserts the mailbox name resolved from `CLAUDE_CODE_SESSION_ID`, both in-process and through CLI whoami.
+The other asserts the ambiguity error for an inherited parent UUID.
+A naive variant that only added the variable resolved the nested case to the parent mailbox and failed the second test.
+Tests and the ignored live harness now remove `CLAUDE_CODE_SESSION_ID` from child environments.
+
+Not verified:
+
+- Interactive `codex --no-daemon` started from Claude; it was not run because the Codex usage limit was nearly exhausted.
+- Claude started from a real Codex tool shell; the inheritance of `CODEX_THREAD_ID` is inferred from the two observations above.
+- The Codex hook environment.
+- `actas --kind claude-code` from a real Claude Bash tool, which the hook-path change now permits when an ancestor and messaging socket are visible.
+- Notification delivery to the new registration after /clear; the earlier registration of the same process also remains online.
+
+### spawn test cleanup
+
+The first real-tmux test registered despawn after the store cleanup hook and after an assertion.
+With a temporary failure inserted, the HEAD version left one tmux server and its stand-in agent, which were then terminated by PID.
+After despawn moved to the start of the single cleanup hook, temporary failures at two points left no tmux server.
+The temporary failures were removed.
+The other five spawn tests already ran despawn before closing the store.
+
+### Codex executable for the notification service
+
+`programs.seatwire.codexExecutable` accepts null or an absolute path string and sets `SEATWIRE_CODEX` for the service.
+`tests/home-manager.sh` sets it and passed with an exact match for `Environment=SEATWIRE_CODEX=/opt/seatwire-test/bin/codex` in the activated unit.
+With the option unset, the unit generated by the flake home-manager check equaled HEAD's except for the package store path in ExecStart.
+That comparison was manual; automated content checks are tracked in issue #1.
+A relative path fails the module assertion.
+Running the service with a codex outside Nix, such as a Volta shim, was not tested.
+
+### State directory and Codex sandbox
+
+These runs used `codex sandbox` without a model, against a temporary state base under `~/.local/state`, outside every writable root.
+In 0.166.0, `codex sandbox` requires `--permission-profile`; the built-in profiles are `:read-only`, `:workspace` and `:danger-full-access`.
+Under `:workspace`, `~/.cache/uv` from the configured `sandbox_workspace_write.writable_roots` was not writable, and `-c sandbox_workspace_write.writable_roots=[...]` had no effect.
+This command therefore does not reproduce the legacy writable roots of the user's Codex sessions.
+
+With an existing DB, register, whoami, peers, inbox, history, send, reply, ack, retry, status and doctor all failed with `seatwire: unable to open database file`, and the DB was unchanged.
+With the seatwire directory missing, they all failed with `seatwire: ENOENT: no such file or directory, mkdir '<base>/seatwire'`, whether or not the base existed.
+A plain mkdir of the same path inside the sandbox reported EROFS; Node's recursive mkdirSync reports ENOENT instead.
+Neither seatwire message identifies the sandbox write restriction.
+
+A profile defined only with `-c`, extending `:workspace` and granting write on `<base>/seatwire`, made every command succeed except retry.
+Retry failed with `no notification target; register the session first` because the test mailbox had no target.
+The host read the messages sent from the sandbox, the acknowledgement and the new registration.
+The README's TOML profile, placed in a temporary CODEX_HOME, gave the same results with both an absolute path and a `~/` path.
+Without its write rule, the commands failed again.
+A write rule for a missing seatwire directory did not let the sandbox create it.
+
+Not verified: selection through `default_permissions` in a normal Codex session, and the legacy `writable_roots` method.
+The temporary state base and CODEX_HOME directories were deleted, `~/.local/state/seatwire` was not created, and `~/.codex/config.toml` was not changed.
+
+### Checks and cleanup
+
+`node --test tests/*.test.mjs` passed 32 tests.
+The x86_64-linux `nix flake check` passed with 32 tests on each pinned Node.js 24 and 26 runtime and successful Home Manager generation.
+`bash tests/home-manager.sh` passed.
+The running systemd activation harness was not rerun for this revision.
+All test agents, tmux servers and temporary directories started by this revision were stopped or removed.
+The shared Codex app-server and an unrelated Codex session were left running.
+Transcripts of the test sessions remain in each agent's ordinary history.
