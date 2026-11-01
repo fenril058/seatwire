@@ -77,3 +77,23 @@ test('a shared Codex app-server does not prove an individual session is online',
   assert.equal(observed.status[0].online,null);
   assert.equal(observed.peers[0].online,null);
 });
+test('a new Claude session in the same process takes over its socket without taking the old mailbox',t=>{
+  const {store}=fixture(t);
+  // Observed on Claude Code 2.1.316: /clear keeps the process, socket inode and token but changes the session UUID.
+  const process_={pid:process.pid,witness:witness(process.pid),socket:'/run/user/test/cc.sock',socketWitness:'82:5116',token:'t',project:process.cwd()};
+  const before={...process_,session:randomUUID()},after={...process_,session:randomUUID()};
+  store.register('default','claude-code-before','claude-code',before);
+  const unread=store.send('default','sender','claude-code-before','sent before /clear');
+  store.register('default','claude-code-after','claude-code',after);
+  const peers=store.peers('default',process.cwd()).map(p=>p.name);
+  assert.ok(peers.includes('claude-code-after'));
+  assert.ok(!peers.includes('claude-code-before'));
+  assert.equal(store.delivery('default','claude-code-before').notification,'none');
+  // The superseded mailbox keeps its message, unread, and is never nudged into the new conversation.
+  assert.equal(store.inbox('default','claude-code-before')[0].id,unread);
+  assert.equal(store.claim(),null);
+  assert.match(store.status().find(a=>a.name==='claude-code-before').error,/claude-code-after/);
+  // Resuming the earlier conversation in that process restores its notifications.
+  store.register('default','claude-code-before','claude-code',before);
+  assert.equal(store.claim().name,'claude-code-before');
+});

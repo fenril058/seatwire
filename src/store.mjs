@@ -88,7 +88,20 @@ export class Store {
         ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
         notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
       if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
+      if (kind === 'claude-code' && target?.socket) this.supersede(team,who,target);
     });
+  }
+  // A Claude process keeps one messaging socket across /clear, so the latest session owns it.
+  // Earlier sessions keep their mailboxes but are no longer nudged into the new conversation.
+  supersede(team, who, target) {
+    const stale = this.db.prepare(`SELECT team,name FROM agents WHERE kind='claude-code' AND NOT (team=? AND name=?)
+      AND json_extract(target,'$.socket')=? AND json_extract(target,'$.socketWitness')=?
+      AND json_extract(target,'$.witness')=? AND json_extract(target,'$.session')<>?`)
+      .all(team,who,target.socket,target.socketWitness,target.witness,target.session);
+    for (const row of stale) {
+      this.db.prepare('UPDATE agents SET target=NULL,generation=?,lease=NULL,lease_until=0,retry_at=0,failures=0,error=? WHERE team=? AND name=?')
+        .run(randomUUID(),`session replaced in its Claude process by ${who}@${team}; messages kept until it is resumed`,row.team,row.name);
+    }
   }
   send(team, from, to, body) {
     name(team); name(from); name(to);
