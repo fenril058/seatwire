@@ -146,3 +146,43 @@ test('host refuses replaced launch identity and socket without publishing a targ
  assert.match(s.db.prepare('SELECT error FROM pending_registrations').get().error,/socket replaced/);
  assert.equal(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
 });
+
+test('managed launches reuse one hook definition and do not inherit the spawner session', async t => {
+ const {randomUUID}=await import('node:crypto');
+ const dir=mkdtempSync(join(tmpdir(),'sw-env-'));const old={...process.env};const s=new Store(join(dir,'seatwire'));
+ const bin=join(dir,'bin');mkdirSync(bin);
+ const recorder=`#!${process.execPath}
+import {writeFileSync} from 'node:fs';
+const keys=['CLAUDE_CODE_SESSION_ID','CLAUDE_SESSION_ID','CODEX_THREAD_ID','CLAUDE_CODE_MESSAGING_SOCKET','CLAUDE_CODE_MESSAGING_TOKEN','CLAUDECODE','CLAUDE_PID','SEATWIRE_LAUNCH_ID','SEATWIRE_TEAM','SEATWIRE_NAME','XDG_STATE_HOME'];
+writeFileSync(${JSON.stringify(dir)}+'/'+process.env.SEATWIRE_NAME+'.json',JSON.stringify({args:process.argv.slice(2),env:Object.fromEntries(keys.map(k=>[k,process.env[k]??null]))}));
+setInterval(()=>{},1000);
+`;
+ writeFileSync(join(bin,'codex'),recorder,{mode:0o700});writeFileSync(join(bin,'claude'),recorder,{mode:0o700});
+ const names=['codex-a','codex-b','claude-a','claude-b'];
+ t.after(()=>{for(const n of names){try{despawn(s,'test',n,true);}catch{}}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
+ const parentLaunch=randomUUID();
+ Object.assign(process.env,{PATH:bin+':'+old.PATH,SEATWIRE_CODEX:join(bin,'codex'),XDG_RUNTIME_DIR:dir,
+  CLAUDE_CODE_SESSION_ID:randomUUID(),CLAUDE_SESSION_ID:randomUUID(),CODEX_THREAD_ID:randomUUID(),
+  CLAUDE_CODE_MESSAGING_SOCKET:'/run/parent.sock',CLAUDE_CODE_MESSAGING_TOKEN:'parent-token',CLAUDECODE:'1',CLAUDE_PID:'4242',
+  SEATWIRE_LAUNCH_ID:parentLaunch,SEATWIRE_TEAM:'parent-team',SEATWIRE_NAME:'parent'});
+ const ids={};
+ for(const n of names) ids[n]=launch(s,'test',n,n.startsWith('codex')?'codex':'claude-code',{cli:resolve('src/cli.mjs')}).launchId;
+ const seen={};
+ for(const n of names){
+  for(let i=0;i<100&&!existsSync(join(dir,n+'.json'));i++) await new Promise(r=>setTimeout(r,20));
+  seen[n]=JSON.parse(readFileSync(join(dir,n+'.json'),'utf8'));
+ }
+ // An identical definition lets a trusted hook stay trusted for the next launch.
+ assert.deepEqual(seen['codex-a'].args,seen['codex-b'].args);
+ assert.deepEqual(seen['claude-a'].args,seen['claude-b'].args);
+ // A managed Codex owns its hook environment and process lifetime instead of a shared daemon.
+ assert.equal(seen['codex-a'].args[0],'--no-daemon');
+ for(const n of names){
+  const env=seen[n].env;
+  for(const k of ['CLAUDE_CODE_SESSION_ID','CLAUDE_SESSION_ID','CODEX_THREAD_ID','CLAUDE_CODE_MESSAGING_SOCKET','CLAUDE_CODE_MESSAGING_TOKEN','CLAUDECODE','CLAUDE_PID'])
+   assert.equal(env[k],null,`${n} inherited ${k}`);
+  assert.equal(env.SEATWIRE_LAUNCH_ID,ids[n]);
+  assert.equal(env.SEATWIRE_TEAM,'test');assert.equal(env.SEATWIRE_NAME,n);
+  assert.equal(env.XDG_STATE_HOME,dir);
+ }
+});

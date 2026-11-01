@@ -11,6 +11,8 @@ export function tmux(socket, args) {
   return r.stdout.trim();
 }
 export const quote = s => `'${String(s).replaceAll("'", "'\\''")}'`;
+// tmux copies the spawner's environment. These identify that session or reach its transport.
+const SPAWNER_SESSION = ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'CODEX_THREAD_ID', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDECODE', 'CLAUDE_PID'];
 export function readLaunch(store, team, who) {
   const row = store.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team, who);
   return row ? JSON.parse(row.record) : null;
@@ -56,12 +58,17 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
     store.db.prepare('INSERT INTO agents(team,name,kind,generation) VALUES(?,?,?,?) ON CONFLICT(team,name) DO NOTHING').run(team, who, kind, randomUUID());
     store.db.prepare('INSERT INTO launches(team,name,record) VALUES(?,?,?)').run(team, who, JSON.stringify(reservation));
   });
-  const hook = { matcher: '*', hooks: [{ type: 'command', command: `${quote(process.execPath)} ${quote(cli)} --state-home ${quote(dirname(dirname(store.path)))} --team ${team} --name ${who} hook --kind ${kind} --launch-id ${id}` }] };
+  const state = dirname(dirname(store.path));
+  // Launch identity travels in the environment: Codex trusts a hook by its definition hash,
+  // so an identical command keeps one review valid for later launches.
+  const command = `${quote(process.execPath)} ${quote(cli)} --state-home ${quote(state)} hook --kind ${kind}`;
+  const hook = { matcher: '*', hooks: [{ type: 'command', command }] };
+  // --no-daemon keeps the hook environment and session lifetime in this pane's process.
   const args = kind === 'codex'
-    ? [process.env.SEATWIRE_CODEX || 'codex', '-c', `hooks.SessionStart=[{matcher="*",hooks=[{type="command",command=${JSON.stringify(hook.hooks[0].command)}}]}]`, ...(resume ? ['resume', resume] : [])]
+    ? [process.env.SEATWIRE_CODEX || 'codex', '--no-daemon', '-c', `hooks.SessionStart=[{matcher="*",hooks=[{type="command",command=${JSON.stringify(command)}}]}]`, ...(resume ? ['resume', resume] : [])]
     : ['claude', '--settings', JSON.stringify({ hooks: { SessionStart: [hook] } }), ...(resume ? ['--resume', resume] : [])];
   if (prompt) args.push(prompt);
-  const env = ['env', `SEATWIRE_LAUNCH_ID=${id}`, `SEATWIRE_TEAM=${team}`, `SEATWIRE_NAME=${who}`, `XDG_STATE_HOME=${dirname(dirname(store.path))}`];
+  const env = ['env', ...SPAWNER_SESSION.flatMap(key => ['-u', key]), `SEATWIRE_LAUNCH_ID=${id}`, `SEATWIRE_TEAM=${team}`, `SEATWIRE_NAME=${who}`, `XDG_STATE_HOME=${state}`];
   try {
     tmux(socket, ['-f', '/dev/null', 'new-session', '-d', '-s', 'agent', 'exec ' + [...env, ...args].map(quote).join(' '), ';', 'set-option', '-g', '@seatwire-launch', id]);
     const agentPid = Number(tmux(socket, ['display-message', '-p', '-t', '%0', '#{pane_pid}']));
