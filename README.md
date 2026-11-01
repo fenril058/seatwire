@@ -115,6 +115,26 @@ Claude は SessionStart 入力の session_id と環境の messaging socket/token
 
 エージェントのサンドボックスから DB にアクセスできるよう、必要な場合は `$XDG_STATE_HOME/seatwire` を許可対象へ明示的に追加してください。
 seatwire はサンドボックス設定を緩和しません。
+Codex では、`~/.codex/config.toml` の permission profile で書き込み許可を加えられます。
+次の例は、組み込みの `:workspace` を継承し、既定の状態ディレクトリへの書き込みを加えます。
+`XDG_STATE_HOME` を設定している場合は、`$XDG_STATE_HOME/seatwire` の絶対パスに置き換えてください。
+
+```toml
+default_permissions = "seatwire"
+
+[permissions.seatwire]
+extends = ":workspace"
+
+[permissions.seatwire.filesystem]
+"~/.local/state/seatwire" = "write"
+```
+
+この profile は codex-cli 0.166.0 の `codex sandbox -P seatwire` で検証しました。
+通常起動で `default_permissions` により選ばれることは確認していません。
+Codex の公式ドキュメントは、`default_permissions` と `[permissions]` を `sandbox_mode` や `[sandbox_workspace_write]` と併用しないよう求めています。
+既に `[sandbox_workspace_write]` を使っている場合は、その `writable_roots` に同じディレクトリを加える方法もありますが、こちらは未検証です。
+状態ディレクトリがまだない場合、許可を加えてもサンドボックス内からは作成できません。
+先にホストで `seatwire status` などを一度実行するか、通知サービスを起動して作成してください。
 通知サービスには Codex 実行ファイルが必要です。
 未設定時は、サービスの PATH（Home Manager のプロファイルの `bin`、`/usr/bin`、`/bin`）から `codex` を探します。
 それ以外の場所にある場合は、`programs.seatwire.codexExecutable` に絶対パスを指定してください。
