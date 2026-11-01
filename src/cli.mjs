@@ -84,8 +84,8 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
       }
       case 'whoami': result={team,name:who}; break;
       case 'peers': result=store.peers(team,process.cwd(),v.all); break;
-      case 'reply': result={id:store.reply(team,who,Number(p.shift()),p.join(' '))}; break;
-      case 'send': result={id:store.send(team,who,v.to,p.join(' '))}; break;
+      case 'reply': { const sent=store.reply(team,who,Number(p.shift()),p.join(' ')); result={...sent,...store.delivery(team,sent.to)}; break; }
+      case 'send': result={id:store.send(team,who,v.to,p.join(' ')),to:v.to,...store.delivery(team,v.to)}; break;
       case 'inbox': case 'history': result=store.inbox(team,who,command==='history'); break;
       case 'ack': result={marked:store.ack(team,who,p.map(Number))}; break;
       case 'retry': result=store.retry(team,p[0]); break;

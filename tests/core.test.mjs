@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, statSync, chmodSync, symlinkSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
@@ -110,4 +110,27 @@ test('unwritable state names the directory and the sandbox instead of a bare I/O
   chmodSync(state,0o700);
   const reopened=new Store(state);t.after(()=>reopened.close());
   assert.equal(reopened.db.prepare('SELECT count(*) AS n FROM agents').get().n,1);
+});
+test('send and reply tell the sender whether the recipient can be notified, not that it read the message',t=>{
+  const {s,dir}=fixture(t);
+  const run=(who,...args)=>{
+    const r=spawnSync(process.execPath,['src/cli.mjs','--state-home',dir,'--team','test','--name',who,...args],{encoding:'utf8',
+      env:{...process.env,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',CLAUDE_SESSION_ID:'',CLAUDE_CODE_SESSION_ID:'',CODEX_THREAD_ID:''}});
+    assert.equal(r.status,0,r.stderr);return JSON.parse(r.stdout);
+  };
+  const offline=run('alice','send','--to','bob','offline');
+  assert.equal(offline.notification,'none');assert.match(offline.detail,/no registered session/);
+  s.register('test','bob','codex',{pid:process.pid,witness:witness(process.pid),session:randomUUID()});
+  const pending=run('alice','send','--to','bob','live');
+  assert.equal(pending.notification,'pending');assert.match(pending.detail,/only ack/);
+  s.db.prepare("UPDATE agents SET error='socket replaced',failures=2 WHERE name='bob'").run();
+  const failing=run('alice','send','--to','bob','failing');
+  assert.equal(failing.notification,'failing');assert.equal(failing.error,'socket replaced');
+  s.db.prepare("UPDATE agents SET error=NULL,target=json_set(target,'$.witness','expired') WHERE name='bob'").run();
+  const stopped=run('alice','send','--to','bob','stopped');
+  assert.equal(stopped.notification,'recipient not running');
+  const replied=run('bob','reply',String(offline.id),'answer');
+  assert.equal(replied.to,'alice');assert.equal(replied.notification,'none');
+  assert.equal(s.inbox('test','bob').length,4);
+  assert.ok(s.inbox('test','bob').every(m=>m.read_at===null));
 });

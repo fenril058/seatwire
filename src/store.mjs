@@ -103,7 +103,16 @@ export class Store {
     if (!Number.isSafeInteger(id) || id < 1) throw Error('reply requires a received message ID');
     const message = this.db.prepare('SELECT sender FROM messages WHERE team=? AND recipient=? AND id=?').get(team,who,id);
     if (!message) throw Error('message not received by this agent');
-    return this.send(team,who,message.sender,body);
+    return {id:this.send(team,who,message.sender,body),to:message.sender};
+  }
+  // What the sender can know is whether the host will try to notify, never that the recipient processed it.
+  delivery(team, who) {
+    const row = this.db.prepare('SELECT target,error FROM agents WHERE team=? AND name=?').get(team,who);
+    if (!row?.target) return {notification:'none',detail:'recipient has no registered session, so no notification is sent; the message stays unread until the recipient checks its inbox'};
+    const online = this.targetOnline(team,who,JSON.parse(row.target));
+    if (online === false) return {notification:'recipient not running',detail:'the registered session has exited; it is notified only after it registers again, for example when resumed'};
+    if (row.error) return {notification:'failing',error:row.error,detail:'recent notifications to this recipient failed; the host notification worker retries with backoff'};
+    return {notification:'pending',online,detail:'the host notification worker asks the recipient to check its inbox; only ack shows that it processed the message'};
   }
   peers(team, project, all = false) {
     name(team);
