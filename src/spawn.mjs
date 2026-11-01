@@ -86,6 +86,16 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
     throw error;
   }
 }
+const FORCE_EXIT_MS = 10000;
+function exited(process, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const pause = new Int32Array(new SharedArrayBuffer(4));
+  while (alive(process)) {
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(pause, 0, 0, 50);
+  }
+  return true;
+}
 export function despawn(store, team, who, force) {
   name(team); name(who);
   const record = readLaunch(store, team, who);
@@ -99,7 +109,9 @@ export function despawn(store, team, who, force) {
   if (force) {
     tmux(record.socket, ['kill-session', '-t', '=agent']);
     forget(store, team, who, record);
-    return { state: 'forced stop requested' };
+    // An agent may save its session after SIGHUP, and its name stays owned until it exits.
+    if (!record.agent) return { state: 'forced stop requested' };
+    return exited(record.agent, FORCE_EXIT_MS) ? { state: 'stopped' } : { state: 'forced stop requested; agent still exiting' };
   }
   tmux(record.socket, ['send-keys', '-t', '%0', 'C-c']);
   return { state: 'interrupt requested; inspect/exit the agent normally, or explicitly use --force', socket: record.socket };

@@ -36,7 +36,7 @@ test('real tmux: literal boot prompt, resume argv, ownership refusal and forced 
  despawn(s,'test','reviewer',false);
  for(let i=0;i<50&&!existsSync(join(dir,'interrupted'));i++) await new Promise(r=>setTimeout(r,20));
  assert.equal(readFileSync(join(dir,'interrupted'),'utf8'),'yes');
- assert.equal(despawn(s,'test','reviewer',true).state,'forced stop requested');
+ assert.equal(despawn(s,'test','reviewer',true).state,'stopped');
  assert.notEqual(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
 });
 
@@ -185,4 +185,24 @@ setInterval(()=>{},1000);
   assert.equal(env.SEATWIRE_TEAM,'test');assert.equal(env.SEATWIRE_NAME,n);
   assert.equal(env.XDG_STATE_HOME,dir);
  }
+});
+
+test('forced despawn waits for a slow agent exit so the name can be launched again', async t => {
+ const {submitRegistration,reconcileRegistrations}=await import('../src/registration.mjs');
+ const {randomUUID}=await import('node:crypto');
+ const dir=mkdtempSync(join(tmpdir(),'sw-slow-'));const old={...process.env};const s=new Store(join(dir,'seatwire'));
+ // Like an agent that flushes its session on SIGHUP before exiting.
+ const ready=join(dir,'ready');
+ const fake=join(dir,'codex');writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nprocess.on('SIGHUP',()=>setTimeout(()=>process.exit(0),600));\nwriteFileSync(${JSON.stringify(ready)},'');\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+ process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
+ t.after(()=>{try{despawn(s,'test','codex',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
+ const first=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
+ for(let i=0;i<100&&!existsSync(ready);i++) await new Promise(r=>setTimeout(r,20));
+ assert.ok(existsSync(ready));
+ submitRegistration(s,'test','codex','codex',first.launchId,{session_id:randomUUID(),cwd:process.cwd()},{});
+ reconcileRegistrations(s);
+ assert.equal(s.status()[0].online,true);
+ assert.equal(despawn(s,'test','codex',true).state,'stopped');
+ const second=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
+ assert.notEqual(second.launchId,first.launchId);
 });
