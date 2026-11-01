@@ -13,14 +13,13 @@ function restoreEnvironment(previous) {
 test('real tmux: literal boot prompt, resume argv, ownership refusal and forced stop',async t=>{
  const dir=mkdtempSync(join(tmpdir(),'sw-spawn-'));
  const old={...process.env};const s=new Store(join(dir,'state'));
- t.after(()=>{restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
+ t.after(()=>{try{despawn(s,'test','reviewer',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  const fake=join(dir,'codex');const output=join(dir,'args.json');
  writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(output)},JSON.stringify({args:process.argv.slice(2),state:process.env.XDG_STATE_HOME}));\nprocess.on('SIGINT',()=>writeFileSync(${JSON.stringify(join(dir,'interrupted'))},'yes'));\nsetInterval(()=>{},1000);\n`,{mode:0o700});
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
  const prompt="quote ' and $(touch MUST_NOT_EXIST)\nnext line";
  const r=launch(s,'test','reviewer','codex',{cli:resolve('src/cli.mjs'),prompt,resume:'12345678-1234-4123-8123-123456789abc'});
  assert.equal(s.status().find(a=>a.name==='reviewer').online,false);
- t.after(()=>{try{despawn(s,'test','reviewer',true);}catch{}});
  for(let i=0;i<50&&!existsSync(output);i++) await new Promise(r=>setTimeout(r,20));
  const captured=JSON.parse(readFileSync(output,'utf8'));
  assert.equal(captured.state,dir);
