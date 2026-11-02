@@ -164,3 +164,34 @@ seatwire similarly avoids guessing a process or newest transcript, while retaini
 A live shared Codex app-server does not prove an individual thread has an attached UI or can immediately run a model turn.
 The host may still queue to that exact thread UUID, but availability is reported as unknown and read receipts remain the evidence of processing.
 Runtime process verification is intentionally separate from per-session availability; a future supported agent API can refine the latter without changing message semantics.
+
+## Revision: daily use and managed sessions
+
+Codex stores hook trust in config.toml as a definition hash under a key naming the hook source, event and indices; the entry observed for a `-c` override was `/<session-flags>/config.toml:session_start:0:0`.
+Spawn therefore keeps the managed SessionStart command identical across launches and passes the launch ID, team and name only through the pane environment.
+The command still names the seatwire build and the state base, so an update or another state directory needs a new review.
+Managed Codex runs with `--no-daemon`, so the hook inherits that environment and the registered process is the session's own process rather than a shared app-server.
+The pane environment drops the spawner's session UUIDs, Claude messaging socket and token, and Claude nesting markers, because tmux copies the spawner's environment.
+No hook trust is granted or bypassed by seatwire.
+
+Forced despawn waits a bounded time for the recorded agent process to exit.
+The rule that a live process keeps its name is unchanged; the wait only makes the reported state match it.
+
+A Claude Code process keeps one messaging socket, inode and token across /clear while the session UUID changes.
+A notification addressed to the earlier session would reach the new conversation, which has no claim to that mailbox.
+Registering a Claude session therefore removes the notification target of other registrations with the same process witness and socket.
+Their messages and receipts remain, status records which session took over, and a later resume registers the earlier session again.
+Codex targets are not superseded this way because a queue item names its thread and a shared app-server serves several threads.
+
+`send` and `reply` report the recipient's notification state from the sender's view: pending, none, recipient not running or failing.
+These states describe whether the host will try to prompt the recipient, not whether it processed the message.
+Opening the store reports the directory or database when writes are denied, instead of the generic SQLite or recursive mkdir error, and does not change sandbox settings.
+
+`programs.seatwire.claudePlugin` installs the skill as a Claude Code skills-directory plugin whose SessionStart hook runs the same package.
+This serves users whose Claude settings are not managed by Home Manager without editing `settings.json`.
+Claude loads user skills-directory plugins in place without a trust prompt and rejects component symlinks that leave the plugin, so the module builds a directory of regular files.
+Codex has no comparable declarative path for an unmanaged `~/.codex/hooks.json`; the README documents a manual hook and the trade-off between a store path and a stable profile path.
+
+The agmsg revision checked during this revision was `318b082b86508dbbc422fe709b46cac2fc99e25c`.
+The two vendored I/O modules are unchanged since `7082fc03f3a6e3f8d5375bb07bec6b39a674a79b`, so the vendored copies were not updated.
+agmsg's per-turn Stop/PostToolUse inbox hooks provide a delivery path that does not depend on its daemon; seatwire does not adopt them in this revision.

@@ -333,3 +333,108 @@ The running systemd activation harness was not rerun for this revision.
 All test agents, tmux servers and temporary directories started by this revision were stopped or removed.
 The shared Codex app-server and an unrelated Codex session were left running.
 Transcripts of the test sessions remain in each agent's ordinary history.
+
+## Daily-use revision (2026-11-02)
+
+The host remains WSL2 Ubuntu with Node.js 24.18.0, Claude Code 2.1.316, Codex CLI 0.166.0 and tmux 3.8.
+Every live run below used synthetic messages and a temporary state base, and told the model not to read, search or modify files.
+The managed agents ran in this repository's directory, which both agents already trusted.
+
+### Codex hook trust for managed spawn
+
+Before the change, two Codex TUIs started with `-c` SessionStart definitions differing only in a marker both stopped at `Hooks need review` with `1 hook is new or changed`.
+No trust was granted for these probes; they were stopped and no entry was added to `~/.codex/config.toml`.
+Each spawn embedded the launch ID, team and name in its hook command, so every managed Codex launch would have needed a new review.
+
+A regression test records the arguments and environment of four stand-in launches.
+Before the change it failed on three separate assertions: the hook definitions differed, the spawner's `CLAUDE_CODE_SESSION_ID` reached the agent, and Codex lacked `--no-daemon`.
+It passes after the change.
+
+Live, after the change:
+
+- The first managed Codex showed the review screen.
+  The user reviewed the single seatwire definition in the Codex UI and trusted it.
+  Codex recorded it under `/<session-flags>/config.toml:session_start:0:0`.
+- That first launch was never registered.
+  Codex's local log shows its boot-prompt turn at 10:05:36 and the trust write at 10:06:32, and no registration request reached the database.
+  That the untrusted seatwire hook was skipped for this session is an inference; the log shows a hook started and completed at 10:05:36 without naming it, and an already trusted user hook exists.
+- A second managed Codex under another name showed no review screen.
+  `spawn --wait-ready` returned `ready` after host verification, and status reported `online: true`.
+  The registration request carried the launch ID from the pane environment, so the `--no-daemon` hook inherited that environment.
+- The host sent message 1 and ran `daemon --once`.
+  Without further human input, Codex ran inbox, replied `seatwire-managed-codex-ok` as message 2 and acknowledged message 1.
+- Forced despawn of both launches returned `stopped`.
+
+The state base was under `/tmp`, which is writable in the workspace sandbox; the default `~/.local/state/seatwire` was not used.
+Codex reported 1% of its weekly limit remaining, so no further Codex model turns were run.
+
+### Managed Claude Code
+
+- `spawn claude-code --wait-ready` returned `ready` in 0.47 s through the environment-only hook command.
+- After a host notification, Claude read its inbox, replied `seatwire-managed-claude-ok` and acknowledged the message without further input.
+- `despawn --force` followed immediately by `spawn --resume` of the same UUID failed with `agent name owned by live session`.
+  The recorded Claude process had already exited when it was checked about a second later, and the same resume then succeeded.
+- A message sent while the session was stopped reported `recipient not running` and stayed unread.
+  After the resume, a notification produced the reply `seatwire-resumed-ok`, and the message was acknowledged.
+
+The relaunch race is reproduced by a stand-in agent that exits 600 ms after SIGHUP.
+An earlier version of the test passed before the fix because SIGHUP arrived before the stand-in installed its handler; it now waits for a readiness file.
+The corrected test failed before the fix on both the reported state and the refused relaunch, and passes after it.
+After the fix, forced despawn of the real Claude took 0.46 s and 1.06 s, returned `stopped`, and an immediate resume succeeded.
+
+### Inherited environment
+
+A Claude Code started inside a private tmux server from this session's Bash tool had its own `CLAUDE_CODE_SESSION_ID`, messaging socket and `CLAUDE_PID` in its SessionStart hook.
+It still received a synthetic `CODEX_THREAD_ID` and an arbitrary marker variable from its parent.
+The Bash tool environment of this session also contains `CLAUDECODE`, `CLAUDE_PID`, the messaging socket and the token, which tmux copies into a spawned pane.
+Spawn now removes the variables listed in the README.
+Whether a real Codex tool shell receives them was not observed again; the stand-in test checks the pane environment.
+
+### Claude /clear
+
+These runs loaded a seatwire plugin with `claude --plugin-dir`, which applies to one session and changes no settings, and used no model turn until the notification step.
+
+- Before the change, the startup and post-/clear registrations had the same PID, socket path, socket inode and token, and peers listed both as online.
+- After the change, peers listed only the post-/clear session, and status named it in the earlier registration's error.
+- A synthetic notification to the post-/clear registration produced a reply and an acknowledgement.
+  The previous revision listed this delivery as unverified.
+
+A store test failed before the change on the duplicated peer and passes after it; it also checks that the earlier mailbox keeps its unread message and is notified again after re-registration.
+Switching sessions with `/resume` inside a running Claude process was not exercised.
+
+### Claude plugin through Home Manager
+
+The plugin built by the module passed `claude plugin validate` without manifest warnings.
+The same command's catalog-submission checks reported a missing README, which does not affect local loading.
+`claude --plugin-dir` with the built store directory and `XDG_STATE_HOME` pointed at a temporary base registered a normally started Claude session automatically.
+Loading from `~/.claude/skills/seatwire` itself was not exercised, because it would change this user's home.
+That path relies on the official plugin-loading documentation; this session also lists the skills of the user's existing skills-directory plugin under its plugin namespace.
+
+`tests/home-manager.sh` now also activates the plugin configuration, checks that its files are regular files and its hook command is executable, checks that settings.json receives no hook, rejects enabling both Claude options, and removes the plugin on disable.
+It passed, and the flake checks build the plugin configuration as well.
+
+### Other observations
+
+- In the real `:workspace` sandbox, a missing state directory now fails with `cannot create state directory <path>` and an existing database with `cannot write state database <path>`.
+  Both name the directory and state that seatwire does not change sandbox settings; the database was unchanged.
+- `send` to the managed Claude reported `pending`; the managed Codex's reply to the offline host mailbox reported `none`.
+- With only `HOME` and the service's minimal `PATH`, the Volta shim `~/.volta/bin/codex queue --help` exited 0.
+  Running the notification service with it was not tested.
+- The local agmsg checkout was compared against `318b082b86508dbbc422fe709b46cac2fc99e25c`; the vendored I/O modules are unchanged since the recorded revision.
+
+### Checks and cleanup
+
+`node --test tests/*.test.mjs` passed 37 tests.
+The x86_64-linux `nix flake check` passed with 37 tests on each pinned Node.js 24 and 26 runtime and both Home Manager configurations.
+`bash tests/home-manager.sh` and `bash tests/home-manager-systemd.sh` passed.
+All agents and tmux servers started by this revision were stopped, and their socket files were removed.
+Two socket files dated 2026-10-30 remain in `$XDG_RUNTIME_DIR/seatwire-tmux` with no server; they were not created by this revision.
+The trust entry the user created for the test hook definition remains in `~/.codex/config.toml`.
+
+Not verified in this revision:
+
+- A real `home-manager switch` of this user's configuration with the module.
+- A managed Codex resume, /clear in Codex, and a managed Codex whose state base is the default directory inside its sandbox.
+- A Codex `shell_environment_policy` that filters the hook environment; such a filter would drop the launch ID, and the launch would stay pending.
+- Whether one Codex review stays valid across a seatwire update; a changed store path is expected to need a new review.
+- The systemd service delivering to real agents; these runs invoked `daemon --once` by hand.

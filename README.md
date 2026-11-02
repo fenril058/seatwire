@@ -8,7 +8,7 @@ Node.js 24 の組み込み SQLite を使い、実行コードと永続データ�
 送受信・既読・並行アクセス・通知 I/O・tmux 操作・Home Manager の撤去を自動テストしています。
 WSL2 上で通常起動した Claude Code と Codex CLI が相手を発見し、通知で依頼と返信を往復させ、双方で既読にするところまで確認しました。
 Codex のサンドボックスからホスト祖先を探せなかった問題に対し、spawn 管理下ではフックの登録申請をホスト側で検証する方式に変更しました。
-spawn 管理下のホスト照合方式は結合テスト済みですが、この方式での双方向実機通知は別途検証が必要です。
+spawn 管理下の Claude Code と Codex CLI でも、通知による依頼・返信・既読を実機で確認しました。
 詳細は [検証記録](docs/VALIDATION.md) を参照してください。
 
 ## ビルド
@@ -70,6 +70,41 @@ flake 入力にこのリポジトリを追加し、モジュールを import し
 `~/.config/seatwire/hooks.json` に生成される `claude` / `codex` セクションも参照できます。
 Codex の未信頼フックは実行されないため、エージェント自身の信頼確認が必要です。
 
+### Claude の設定を Home Manager で管理していない場合
+
+`claudePlugin` を有効にすると、`~/.claude/skills/seatwire` を Claude Code の skills ディレクトリ用プラグインとして導入します。
+プラグインには Skill と、同じパッケージの `seatwire hook --kind claude-code` を実行する SessionStart フックが入ります。
+`~/.claude/settings.json` は変更しません。
+Claude Code はこのディレクトリをその場で読み込むため、フックのコマンドは Home Manager の世代と一緒に更新・撤去されます。
+ストアパスを可変の settings.json へ手で写す方法と違い、GC 後に古いパスが残りません。
+既定は無効で、`integrateClaude` との同時指定は assertion で拒否します。
+
+```nix
+{
+  programs.seatwire = {
+    enable = true;
+    claudePlugin = true;
+  };
+}
+```
+
+Claude Code の公式ドキュメントでは、`~/.claude/skills/` 配下の `.claude-plugin/plugin.json` を持つディレクトリは `<名前>@skills-dir` として読み込まれ、利用者自身のディレクトリには信頼確認がありません。
+管理設定（managed settings）で skills ディレクトリのプラグインが禁止されている環境では読み込まれません。
+有効化後に起動した Claude で `/plugin` を開くと、`seatwire@skills-dir` を確認できます。
+
+### Codex のフックを手で追加する場合
+
+Codex の設定を Home Manager で管理していない場合、`~/.codex/hooks.json` の `SessionStart` にフックを追加し、Codex の `/hooks` で信頼してください。
+Codex はフック定義のハッシュに対して信頼を記録するため、コマンドの書き方で更新時の扱いが変わります。
+
+- `~/.config/seatwire/hooks.json` のストアパス（`/nix/store/…/bin/seatwire hook --kind codex`）: 信頼したコードに固定されますが、seatwire を更新するたびに再レビューが必要です。
+  手で書き写した場合は、更新後に書き換えないと GC でパスが消えてフックが失敗します。
+- プロファイルの固定パス（`~/.nix-profile/bin/seatwire hook --kind codex` など、`home.profileDirectory` の `bin`）: 更新しても一度の信頼が有効なままです。
+  その代わり、信頼はコマンド文字列に対するもので、更新後に実行されるコードは再レビューされません。
+
+どちらを選ぶかは利用者の判断です。
+seatwire はフックの信頼を自動では変更しません。
+
 ```sh
 codex
 claude
@@ -104,6 +139,22 @@ Claude の Bash から `codex exec` を起動した場合など、子が親の�
 従来の `SEATWIRE_TEAM` と `SEATWIRE_NAME` による役割指定も使えます。
 `reply` は自分が受信したメッセージだけを対象にし、既読にはしません。
 
+`send` と `reply` は、宛先の通知状態を `notification` で返します。
+
+- `pending`: ホストの通知サービスが宛先に inbox の確認を促します。
+  処理したことの証拠にはならず、`ack` か返信で確認します。
+- `none`: 宛先に登録済みのセッションがなく、通知されません。
+  宛先が inbox を確認するまで未読で残ります。
+- `recipient not running`: 登録されたセッションが終了しています。
+  再開などで再登録されるまで通知されません。
+- `failing`: 直近の通知が失敗しています。
+  `error` に理由があり、通知サービスがバックオフして再試行します。
+
+Claude Code の `/clear` は、同じプロセス・同じ messaging socket のまま新しいセッション UUID を開始します。
+新しいセッションが登録されると、同じプロセスとソケットを持つ以前のセッションの登録からは通知先だけを外します。
+以前のセッションのメッセージは受信箱に未読のまま残り、新しい会話へは通知しません。
+`status` の `error` に引き継いだ名前を表示し、以前のセッションを再開すれば再び登録されます。
+
 手動起動したセッションでは、セッション開始フックがセッション ID・祖先プロセス・通知先を検証して登録します。
 この経路ではホスト祖先を参照できないサンドボックス内からの登録は失敗します。
 `spawn` 管理下の登録は、後述するホスト照合の経路を使います。
@@ -115,6 +166,7 @@ Claude は SessionStart 入力の session_id と環境の messaging socket/token
 
 エージェントのサンドボックスから DB にアクセスできるよう、必要な場合は `$XDG_STATE_HOME/seatwire` を許可対象へ明示的に追加してください。
 seatwire はサンドボックス設定を緩和しません。
+書き込みが拒否された場合、コマンドは `cannot create state directory <パス>` または `cannot write state database <パス>` で失敗し、許可が必要なディレクトリを示します。
 Codex では、`~/.codex/config.toml` の permission profile で書き込み許可を加えられます。
 次の例は、組み込みの `:workspace` を継承し、既定の状態ディレクトリへの書き込みを加えます。
 `XDG_STATE_HOME` を設定している場合は、`$XDG_STATE_HOME/seatwire` の絶対パスに置き換えてください。
@@ -145,6 +197,10 @@ Codex の公式ドキュメントは、`default_permissions` と `[permissions]`
   programs.seatwire.codexExecutable = "/opt/codex/bin/codex";
 }
 ```
+
+Volta で導入した Codex は `~/.volta/bin/codex` の shim です。
+この shim は、`HOME` とサービス相当の最小の `PATH` だけを与えた環境でも `codex queue --help` を実行できました。
+その場合は `"${config.home.homeDirectory}/.volta/bin/codex"` を指定できます。
 
 ## メッセージング
 
@@ -202,9 +258,26 @@ spawn は DB に起動を予約してコミットしてから tmux を呼び出�
 別の起動 ID、プロセス開始情報、ソケットに変わっていれば登録を拒否します。
 起動途中で CLI が終了した場合、`status` に `abandoned` が表示され、`despawn` で同じ起動と確認できたものだけを整理できます。
 
+起動 ID・チーム・名前はフックのコマンドに埋め込まず、エージェントの環境変数（`SEATWIRE_LAUNCH_ID` など）で渡します。
+そのため、同じ seatwire のビルドと状態ディレクトリであれば、spawn が渡すフック定義は起動ごとに同一です。
+Codex はフック定義のハッシュに対して信頼を記録するため、一度信頼すれば次の spawn では再レビューを求めません。
+seatwire を更新して実行ファイルのパスが変わると、定義が変わるので再レビューが必要です。
+Codex は `--no-daemon` で起動し、フックの環境とセッションの寿命をペインのプロセスに持たせます。
+共有の app-server を使わないため、`status` と `peers` は個別セッションの生存を `online: true` / `false` で示せます。
+
+フックを初めて信頼する起動では、`--boot-prompt` の最初のターンがレビュー画面の操作より先に始まり、そのセッションの SessionStart から seatwire のフックが除かれることがあります。
+この場合、そのセッションは登録されないため、信頼した後に despawn して spawn し直してください。
+2 回目以降の起動では、レビュー画面は表示されません。
+
+tmux は起動元の環境をペインに引き継ぎます。
+spawn は起動元セッションを指す変数（`CLAUDE_CODE_SESSION_ID`、`CLAUDE_SESSION_ID`、`CODEX_THREAD_ID`、`CLAUDE_CODE_MESSAGING_SOCKET`、`CLAUDE_CODE_MESSAGING_TOKEN`、`CLAUDECODE`、`CLAUDE_PID`）を外してからエージェントを起動します。
+Claude から spawn した Codex に、親 Claude の通知用ソケットとトークンは渡りません。
+
 通常の despawn は Ctrl-C を送り、終了未確認であることを返します。
 自動的な強制終了は行いません。
 `--force` は記録したプロセス開始情報・ソケットと一致する専用セッションだけを終了します。
+エージェントの終了を最大 10 秒待ち、終了を確認できれば `stopped`、できなければ `forced stop requested; agent still exiting` を返します。
+エージェントが生きている間は同じ名前の spawn を拒否するため、`stopped` の後は同じ名前ですぐに `--resume` できます。
 終了した起動記録が残っている場合、despawn で整理してから再度 spawn します。
 `/clear` による別 UUID への切り替えは生存中の所有者変更として拒否します。
 その場合はセッション終了後に起動し直してください。
