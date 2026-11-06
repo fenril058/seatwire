@@ -206,3 +206,31 @@ test('forced despawn waits for a slow agent exit so the name can be launched aga
  const second=launch(s,'test','codex','codex',{cli:resolve('src/cli.mjs')});
  assert.notEqual(second.launchId,first.launchId);
 });
+
+test('managed Claude resumes its original mailbox through host reconciliation after clear', async t => {
+ const {submitRegistration,reconcileRegistrations}=await import('../src/registration.mjs');
+ const {randomUUID}=await import('node:crypto');
+ const {createServer}=await import('node:net');
+ const dir=mkdtempSync(join(tmpdir(),'sw-claude-resume-'));const old={...process.env};const s=new Store(join(dir,'seatwire'));
+ const bin=join(dir,'bin');mkdirSync(bin);
+ writeFileSync(join(bin,'claude'),`#!${process.execPath}\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+ process.env.PATH=bin+':'+old.PATH;process.env.XDG_RUNTIME_DIR=dir;
+ t.after(()=>{try{despawn(s,'test','claude',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
+ const socket=join(dir,'messaging.sock'),server=createServer();
+ await new Promise(r=>server.listen(socket,r));t.after(()=>server.close());
+ const r=launch(s,'test','claude','claude-code',{cli:resolve('src/cli.mjs')});
+ const original=randomUUID(),env={CLAUDE_CODE_MESSAGING_SOCKET:socket};
+ const submit=session_id=>submitRegistration(s,'test','claude','claude-code',r.launchId,{session_id,cwd:process.cwd()},env);
+ submit(original);reconcileRegistrations(s);
+ const before=s.db.prepare('SELECT generation FROM agents WHERE name=?').get('claude').generation;
+ submit(original);reconcileRegistrations(s);
+ assert.equal(s.db.prepare('SELECT generation FROM agents WHERE name=?').get('claude').generation,before);
+ s.register('test','sender','codex');const unread=s.send('test','sender','claude','preserved');
+ assert.throws(()=>submit(randomUUID()),/original/);
+ assert.equal(s.claim(),null);
+ submit(original);reconcileRegistrations(s);
+ const claim=s.claim();assert.equal(claim.name,'claude');assert.equal(claim.upto,unread);
+ assert.equal(JSON.parse(claim.target).session,original);
+ assert.notEqual(claim.generation,before);
+ assert.equal(s.inbox('test','claude')[0].read_at,null);
+});

@@ -181,6 +181,14 @@ A Claude Code process keeps one messaging socket, inode and token across /clear 
 A notification addressed to the earlier session would reach the new conversation, which has no claim to that mailbox.
 Registering a Claude session therefore removes the notification target of other registrations with the same process witness and socket.
 Their messages and receipts remain, status records which session took over, and a later resume registers the earlier session again.
+
+Managed Claude launches with a fixed agent name retain that mailbox's original session UUID in the launch record when a different UUID is submitted.
+Revocation commits before the hook reports an error, clears the target and lease, and changes the generation so an old worker cannot advance the notification cursor.
+The original UUID can submit a fresh request and pass the existing host reconciliation checks to restore delivery.
+A different UUID must use a separate name; this revision does not transfer mailbox ownership.
+External socket writes already in flight cannot be retracted.
+See [session switching](docs/SESSION_SWITCH.md) for alternatives and verification limits.
+
 Codex targets are not superseded this way because a queue item names its thread and a shared app-server serves several threads.
 
 `send` and `reply` report the recipient's notification state from the sender's view: pending, none, recipient not running or failing.

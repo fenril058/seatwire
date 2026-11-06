@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { name, alive, socketWitness, pidNamespace } from './identity.mjs';
 import { readLaunch, observeServer } from './spawn.mjs';
@@ -21,12 +22,27 @@ export function submitRegistration(store, team, who, kind, launchId, input, env 
   }
   const encoded = JSON.stringify(payload);
   if (Buffer.byteLength(encoded) > 65536) throw Error('registration too large');
+  let rejected;
   store.tx(() => {
     const launch = readLaunch(store, team, who);
     if (!launch || launch.id !== launchId || launch.kind !== kind || !['launching','running'].includes(launch.phase)) throw Error('stale or mismatched launch');
     if (launch.project && resolve(launch.project) !== resolve(payload.project)) throw Error('session project mismatch');
     const old = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(team, who);
     const target = old?.target && JSON.parse(old.target);
+    // Bind the fixed mailbox to its original conversation, including while offline.
+    // Commit revocation before reporting rejection: throwing inside tx would undo it.
+    if (kind === 'claude-code') {
+      const owner = launch.mailboxSession || (target?.launchId === launchId ? target.session : null);
+      if (owner && owner !== payload.session) {
+        launch.mailboxSession = owner;
+        store.db.prepare('UPDATE launches SET record=? WHERE team=? AND name=?').run(JSON.stringify(launch),team,who);
+        store.db.prepare('UPDATE agents SET target=NULL,generation=?,lease=NULL,lease_until=0,error=? WHERE team=? AND name=?')
+          .run(randomUUID(),'conversation changed; resume the original UUID or launch under a new name',team,who);
+        store.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(launchId);
+        rejected = 'conversation changed; resume the original UUID or launch under a new name; unread mailbox retained';
+        return;
+      }
+    }
     if (target?.launchId === launchId) {
       if (target.session !== payload.session) throw Error('live launch already bound to another session');
       return; // Duplicate SessionStart/compact does not reset notification progress.
@@ -37,6 +53,7 @@ export function submitRegistration(store, team, who, kind, launchId, input, env 
       ON CONFLICT(launch_id) DO UPDATE SET payload=excluded.payload,error=NULL,created=excluded.created`)
       .run(launchId,team,who,encoded,Date.now());
   });
+  if (rejected) throw Error(rejected);
 }
 export function reconcileRegistrations(store) {
   const requests = store.db.prepare('SELECT * FROM pending_registrations WHERE error IS NULL ORDER BY created LIMIT 100').all();

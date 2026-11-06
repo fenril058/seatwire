@@ -35,3 +35,30 @@ test('schema 1 migration preserves messages and launches', t => {
  assert.equal(JSON.parse(s.db.prepare('SELECT record FROM launches').get().record).socket,'/old/socket');
  assert.equal(s.db.prepare('SELECT count(*) AS n FROM pending_registrations').get().n,0);
 });
+
+test('managed Claude clear revokes the target, preserves unread and allows only the original UUID to resume', async t => {
+ const { submitRegistration } = await import('../src/registration.mjs');
+ const { witness } = await import('../src/identity.mjs');
+ const dir=mkdtempSync(join(tmpdir(),'sw-clear-'));const s=new Store(join(dir,'seatwire'));
+ t.after(()=>{s.close();rmSync(dir,{recursive:true,force:true});});
+ const id=randomUUID(),session=randomUUID(),other=randomUUID();
+ const target={session,launchId:id,pid:process.pid,witness:witness(process.pid),socket:'/tmp/fixture.sock',socketWitness:'fixture',project:process.cwd()};
+ s.register('test','claude','claude-code',target);s.register('test','sender','codex');
+ s.db.prepare('INSERT INTO launches VALUES(?,?,?)').run('test','claude',JSON.stringify({id,kind:'claude-code',phase:'running',project:process.cwd()}));
+ const unread=s.send('test','sender','claude','keep me');const claim=s.claim();
+ const input=session_id=>({session_id,cwd:process.cwd(),hook_event_name:'SessionStart'});
+ const env={CLAUDE_CODE_MESSAGING_SOCKET:'/tmp/fixture.sock'};
+ assert.throws(()=>submitRegistration(s,'test','claude','claude-code',id,input(other),env),/session|original/);
+ assert.equal(s.db.prepare('SELECT target FROM agents WHERE name=?').get('claude').target,null);
+ assert.notEqual(s.db.prepare('SELECT generation FROM agents WHERE name=?').get('claude').generation,claim.generation);
+ s.finish(claim,null);
+ assert.equal(s.status().find(a=>a.name==='claude').notified,0);
+ assert.equal(s.claim(),null);
+ assert.deepEqual(s.inbox('test','claude').map(m=>[m.id,m.read_at]),[[unread,null]]);
+ assert.throws(()=>submitRegistration(s,'test','claude','claude-code',id,input(other),env),/original/);
+ submitRegistration(s,'test','claude','claude-code',id,input(session),env);
+ const request=s.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(id);
+ assert.equal(JSON.parse(request.payload).session,session);
+ s.register('test','claude','claude-code',target);
+ assert.equal(s.claim().upto,unread);
+});
