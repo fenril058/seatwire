@@ -182,12 +182,15 @@ A notification addressed to the earlier session would reach the new conversation
 Registering a Claude session therefore removes the notification target of other registrations with the same process witness and socket.
 Their messages and receipts remain, status records which session took over, and a later resume registers the earlier session again.
 
-Managed Claude launches with a fixed agent name retain that mailbox's original session UUID in the launch record when a different UUID is submitted.
-Revocation commits before the hook reports an error, clears the target and lease, and changes the generation so an old worker cannot advance the notification cursor.
-The original UUID can submit a fresh request and pass the existing host reconciliation checks to restore delivery.
-A different UUID must use a separate name; this revision does not transfer mailbox ownership.
-External socket writes already in flight cannot be retracted.
-See [session switching](docs/SESSION_SWITCH.md) for alternatives and verification limits.
+Managed launches bind their first observed UUID, including a pending registration before a target is published.
+A different UUID permanently revokes automatic registration for that launch in its existing JSON record.
+Revocation commits before the hook reports an error, clears the target, lease and pending request, and changes the generation.
+Old SessionStart events and claimed resume events cannot restore that launch, because their provenance cannot be distinguished.
+Recovery requires explicitly stopping the old launch and resuming the original UUID in a new managed launch through host process, launch and socket validation.
+Launch publication preserves registration metadata written concurrently by startup hooks.
+Reconciliation compares the launch record and pending payload and checks revocation again inside the registration transaction.
+A previously claimed notification can still execute or finish external I/O after revocation, but its DB completion is fenced.
+See [session switching](docs/SESSION_SWITCH.md) for verification limits.
 
 Codex targets are not superseded this way because a queue item names its thread and a shared app-server serves several threads.
 

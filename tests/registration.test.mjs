@@ -36,7 +36,7 @@ test('schema 1 migration preserves messages and launches', t => {
  assert.equal(s.db.prepare('SELECT count(*) AS n FROM pending_registrations').get().n,0);
 });
 
-test('managed Claude clear revokes the target, preserves unread and allows only the original UUID to resume', async t => {
+test('managed Claude clear permanently revokes the launch and preserves unread and lease fencing', async t => {
  const { submitRegistration } = await import('../src/registration.mjs');
  const { witness } = await import('../src/identity.mjs');
  const dir=mkdtempSync(join(tmpdir(),'sw-clear-'));const s=new Store(join(dir,'seatwire'));
@@ -55,10 +55,62 @@ test('managed Claude clear revokes the target, preserves unread and allows only 
  assert.equal(s.status().find(a=>a.name==='claude').notified,0);
  assert.equal(s.claim(),null);
  assert.deepEqual(s.inbox('test','claude').map(m=>[m.id,m.read_at]),[[unread,null]]);
- assert.throws(()=>submitRegistration(s,'test','claude','claude-code',id,input(other),env),/original/);
- submitRegistration(s,'test','claude','claude-code',id,input(session),env);
- const request=s.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(id);
- assert.equal(JSON.parse(request.payload).session,session);
- s.register('test','claude','claude-code',target);
- assert.equal(s.claim().upto,unread);
+ for (const source of ['startup','resume']) assert.throws(()=>submitRegistration(s,'test','claude','claude-code',id,{...input(session),source},env),/revoked/);
+ assert.equal(s.db.prepare('SELECT count(*) AS n FROM pending_registrations').get().n,0);
+ assert.equal(s.db.prepare('SELECT target FROM agents WHERE name=?').get('claude').target,null);
+});
+
+function managedFixture(t) {
+ const dir=mkdtempSync(join(tmpdir(),'sw-revoked-'));let s=new Store(join(dir,'seatwire'));
+ t.after(()=>{s.close();rmSync(dir,{recursive:true,force:true});});
+ const id=randomUUID(),a=randomUUID(),b=randomUUID();
+ s.register('test','claude','claude-code');
+ s.db.prepare('INSERT INTO launches VALUES(?,?,?)').run('test','claude',JSON.stringify({id,kind:'claude-code',phase:'launching',project:process.cwd()}));
+ return {s,id,a,b,dir};
+}
+test('first pending UUID binds the launch and a second UUID permanently clears it',async t=>{
+ const {submitRegistration}=await import('../src/registration.mjs');
+ const {s,id,a,b,dir}=managedFixture(t);
+ const submit=(session_id,source='startup')=>submitRegistration(s,'test','claude','claude-code',id,{session_id,source,cwd:process.cwd()},{CLAUDE_CODE_MESSAGING_SOCKET:'/tmp/fixture.sock'});
+ submit(a);submit(a);
+ assert.throws(()=>submit(b));
+ assert.equal(s.db.prepare('SELECT count(*) AS n FROM pending_registrations').get().n,0);
+ const generation=s.db.prepare('SELECT generation FROM agents').get().generation;
+ assert.equal(JSON.parse(s.db.prepare('SELECT record FROM launches').get().record).registrationRevoked,true);
+ const reopened=new Store(join(dir,'seatwire'));
+ try {
+  for(const source of ['startup','resume']) assert.throws(()=>submitRegistration(reopened,'test','claude','claude-code',id,{session_id:a,source,cwd:process.cwd()},{CLAUDE_CODE_MESSAGING_SOCKET:'/tmp/fixture.sock'}),/revoked/);
+ } finally {reopened.close();}
+ assert.equal(s.db.prepare('SELECT generation FROM agents').get().generation,generation);
+ assert.equal(s.db.prepare('SELECT target FROM agents').get().target,null);
+});
+for (const registered of [false,true]) test(`invalid launch or project cannot revoke a valid ${registered?'target':'pending registration'}`,async t=>{
+ const {submitRegistration}=await import('../src/registration.mjs');
+ const {s,id,a,b}=managedFixture(t),env={CLAUDE_CODE_MESSAGING_SOCKET:'/tmp/fixture.sock'};
+ const submit=(launchId,session_id,cwd)=>submitRegistration(s,'test','claude','claude-code',launchId,{session_id,cwd},env);
+ submit(id,a,process.cwd());
+ if(registered) {
+  const {witness}=await import('../src/identity.mjs');
+  s.register('test','claude','claude-code',{session:a,launchId:id,pid:process.pid,witness:witness(process.pid)});
+ }
+ const target=s.db.prepare('SELECT target FROM agents').get().target;
+ const before=s.db.prepare('SELECT record FROM launches').get().record;
+ assert.throws(()=>submit(randomUUID(),b,process.cwd()),/launch/);
+ assert.throws(()=>submit('invalid',b,process.cwd()),/UUID/);
+ assert.throws(()=>submit(id,b,'/different-project'),/project/);
+ assert.equal(s.db.prepare('SELECT record FROM launches').get().record,before);
+ assert.equal(s.db.prepare('SELECT target FROM agents').get().target,target);
+ assert.equal(JSON.parse(s.db.prepare('SELECT payload FROM pending_registrations').get().payload).session,a);
+});
+
+test('launch publication cannot overwrite revocation observed while tmux is starting',async t=>{
+ const {submitRegistration}=await import('../src/registration.mjs');
+ const {updateLaunch}=await import('../src/spawn.mjs');
+ const {s,id,a,b}=managedFixture(t);
+ const reservation=JSON.parse(s.db.prepare('SELECT record FROM launches').get().record);
+ const submit=session_id=>submitRegistration(s,'test','claude','claude-code',id,{session_id,cwd:process.cwd()},{CLAUDE_CODE_MESSAGING_SOCKET:'/tmp/fixture.sock'});
+ submit(a);assert.throws(()=>submit(b));
+ updateLaunch(s,'test','claude',id,{...reservation,phase:'running'});
+ assert.equal(JSON.parse(s.db.prepare('SELECT record FROM launches').get().record).registrationRevoked,true);
+ assert.throws(()=>submit(a),/revoked/);
 });

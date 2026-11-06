@@ -74,6 +74,7 @@ export class Store {
       if (expected) {
         const launch = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
         const request = this.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(target.launchId);
+        if (launch && JSON.parse(launch.record).registrationRevoked) throw Error('launch registration revoked');
         if (launch?.record !== expected.record || request?.payload !== expected.payload) throw Error('registration request changed');
       }
       const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
@@ -182,7 +183,7 @@ export class Store {
     const row = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
     if (!row) return false;
     const launch = JSON.parse(row.record);
-    return launch.id === target.launchId && launch.phase === 'running' && alive(launch)
+    return !launch.registrationRevoked && launch.id === target.launchId && launch.phase === 'running' && alive(launch)
       && launch.agent?.witness === target.witness && launch.agent?.pid === target.pid;
   }
   status() {

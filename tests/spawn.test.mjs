@@ -78,9 +78,10 @@ test('host validates a managed hook without relying on hook process ancestry', a
  assert.equal(target.session,session);assert.equal(target.launchId,r.launchId);
  assert.equal(s.status()[0].online,true);
  assert.throws(()=>submitRegistration(s,'test','codex','codex',randomUUID(),input,{}),/stale/);
- assert.throws(()=>submitRegistration(s,'test','codex','codex',r.launchId,{...input,session_id:randomUUID()},{}),/another session/);
  submitRegistration(s,'test','codex','codex',r.launchId,input,{});reconcileRegistrations(s);
  assert.equal(s.db.prepare('SELECT generation FROM agents WHERE name=?').get('codex').generation,row.generation);
+ assert.throws(()=>submitRegistration(s,'test','codex','codex',r.launchId,{...input,session_id:randomUUID()},{}),/revoked/);
+ assert.throws(()=>submitRegistration(s,'test','codex','codex',r.launchId,input,{}),/revoked/);
  despawn(s,'test','codex',true);
  assert.equal(s.status()[0].online,false);
  assert.throws(()=>submitRegistration(s,'test','codex','codex',r.launchId,input,{}),/stale/);
@@ -207,7 +208,7 @@ test('forced despawn waits for a slow agent exit so the name can be launched aga
  assert.notEqual(second.launchId,first.launchId);
 });
 
-test('managed Claude resumes its original mailbox through host reconciliation after clear', async t => {
+test('managed Claude requires an explicit new launch to resume after revocation', async t => {
  const {submitRegistration,reconcileRegistrations}=await import('../src/registration.mjs');
  const {randomUUID}=await import('node:crypto');
  const {createServer}=await import('node:net');
@@ -226,11 +227,71 @@ test('managed Claude resumes its original mailbox through host reconciliation af
  submit(original);reconcileRegistrations(s);
  assert.equal(s.db.prepare('SELECT generation FROM agents WHERE name=?').get('claude').generation,before);
  s.register('test','sender','codex');const unread=s.send('test','sender','claude','preserved');
- assert.throws(()=>submit(randomUUID()),/original/);
+ assert.throws(()=>submit(randomUUID()),/revoked/);
+ assert.throws(()=>submit(original),/revoked/);
+ assert.throws(()=>submitRegistration(s,'test','claude','claude-code',r.launchId,{session_id:original,source:'resume',cwd:process.cwd()},env),/revoked/);
  assert.equal(s.claim(),null);
- submit(original);reconcileRegistrations(s);
+ assert.equal(despawn(s,'test','claude',true).state,'stopped');
+ const next=launch(s,'test','claude','claude-code',{cli:resolve('src/cli.mjs'),resume:original});
+ assert.notEqual(next.launchId,r.launchId);
+ const resume=()=>submitRegistration(s,'test','claude','claude-code',next.launchId,{session_id:original,source:'resume',cwd:process.cwd()},env);
+ resume();
+ const valid=s.db.prepare('SELECT record FROM launches').get().record;
+ const invalid=JSON.parse(valid);invalid.agent.witness='expired';
+ s.db.prepare('UPDATE launches SET record=?').run(JSON.stringify(invalid));
+ reconcileRegistrations(s);assert.equal(s.db.prepare('SELECT target FROM agents WHERE name=?').get('claude').target,null);
+ assert.match(s.db.prepare('SELECT error FROM pending_registrations').get().error,/not running/);
+ s.db.prepare('UPDATE launches SET record=?').run(valid);
+ resume();reconcileRegistrations(s);
  const claim=s.claim();assert.equal(claim.name,'claude');assert.equal(claim.upto,unread);
  assert.equal(JSON.parse(claim.target).session,original);
  assert.notEqual(claim.generation,before);
  assert.equal(s.inbox('test','claude')[0].read_at,null);
+});
+
+for (const [registered,beforeRead] of [[false,true],[false,false],[true,false]]) test(`host cannot revive a revoked ${registered?'registered':'pending'} request ${beforeRead?'before':'after'} it was read`, async t => {
+ const {submitRegistration,reconcileRegistrations}=await import('../src/registration.mjs');
+ const {randomUUID}=await import('node:crypto');
+ const {createServer}=await import('node:net');
+ const dir=mkdtempSync(join(tmpdir(),'sw-claude-race-')),old={...process.env},s=new Store(join(dir,'seatwire'));
+ const bin=join(dir,'bin');mkdirSync(bin);
+ writeFileSync(join(bin,'claude'),`#!${process.execPath}\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+ process.env.PATH=bin+':'+old.PATH;process.env.XDG_RUNTIME_DIR=dir;
+ t.after(()=>{try{despawn(s,'test','claude',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
+ const socket=join(dir,'socket'),server=createServer();
+ await new Promise(r=>server.listen(socket,r));t.after(()=>server.close());
+ const r=launch(s,'test','claude','claude-code',{cli:resolve('src/cli.mjs')}),a=randomUUID(),b=randomUUID();
+ const submit=(session_id,source='startup')=>submitRegistration(s,'test','claude','claude-code',r.launchId,{session_id,source,cwd:process.cwd()},{CLAUDE_CODE_MESSAGING_SOCKET:socket});
+ submit(a);
+ if(registered) {
+  reconcileRegistrations(s);
+  // Submit a real pending request for the same UUID while retaining the live target.
+  // A changed target is not needed: this directly exercises a read-before-revoke race.
+  s.db.prepare('INSERT INTO pending_registrations VALUES(?,?,?,?,?,?)').run(r.launchId,'test','claude',JSON.stringify({session:a,project:process.cwd(),socket,token:'',transcript:''}),null,Date.now());
+ }
+ s.register('test','sender','codex');
+ const acked=s.send('test','sender','claude','handled');s.ack('test','claude',[acked]);
+ const unread=s.send('test','sender','claude','retained');
+ const lease=registered?s.claim():null;
+ if(beforeRead) {
+  assert.throws(()=>submit(b));
+  reconcileRegistrations(s);
+ }
+ const actual=s.register.bind(s);let reached=false;
+ s.register=(...args)=>{
+  reached=true;
+  // A separate connection commits revocation after reconcile read both snapshots.
+  const other=new Store(join(dir,'seatwire'));
+  try {assert.throws(()=>submitRegistration(other,'test','claude','claude-code',r.launchId,{session_id:b,cwd:process.cwd()},{CLAUDE_CODE_MESSAGING_SOCKET:socket}));}
+  finally {other.close();}
+  assert.throws(()=>actual(...args),/revoked|request changed/);
+ };
+ reconcileRegistrations(s);assert.equal(reached,!beforeRead);s.register=actual;
+ assert.equal(s.db.prepare('SELECT target FROM agents WHERE name=?').get('claude').target,null);
+ assert.equal(s.db.prepare('SELECT count(*) AS n FROM pending_registrations').get().n,0);
+ if(lease) {s.finish(lease,null);assert.equal(s.status().find(a=>a.name==='claude').notified,0);}
+ for(const source of ['startup','resume']) assert.throws(()=>submit(a,source),/revoked/);
+ reconcileRegistrations(s);assert.equal(s.claim(),null);
+ assert.deepEqual(s.inbox('test','claude').map(m=>[m.id,m.read_at]),[[unread,null]]);
+ assert.ok(s.inbox('test','claude',true).find(m=>m.id===acked).read_at);
 });

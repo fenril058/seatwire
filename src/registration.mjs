@@ -29,26 +29,26 @@ export function submitRegistration(store, team, who, kind, launchId, input, env 
     if (launch.project && resolve(launch.project) !== resolve(payload.project)) throw Error('session project mismatch');
     const old = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(team, who);
     const target = old?.target && JSON.parse(old.target);
-    // Bind the fixed mailbox to its original conversation, including while offline.
-    // Commit revocation before reporting rejection: throwing inside tx would undo it.
-    if (kind === 'claude-code') {
-      const owner = launch.mailboxSession || (target?.launchId === launchId ? target.session : null);
-      if (owner && owner !== payload.session) {
-        launch.mailboxSession = owner;
-        store.db.prepare('UPDATE launches SET record=? WHERE team=? AND name=?').run(JSON.stringify(launch),team,who);
-        store.db.prepare('UPDATE agents SET target=NULL,generation=?,lease=NULL,lease_until=0,error=? WHERE team=? AND name=?')
-          .run(randomUUID(),'conversation changed; resume the original UUID or launch under a new name',team,who);
-        store.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(launchId);
-        rejected = 'conversation changed; resume the original UUID or launch under a new name; unread mailbox retained';
-        return;
-      }
-    }
-    if (target?.launchId === launchId) {
-      if (target.session !== payload.session) throw Error('live launch already bound to another session');
-      return; // Duplicate SessionStart/compact does not reset notification progress.
-    }
+    if (launch.registrationRevoked) throw Error('launch registration revoked; explicitly stop this launch and resume in a new managed launch');
     const pending = store.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(launchId);
-    if (pending && JSON.parse(pending.payload).session !== payload.session) throw Error('launch has a different pending session');
+    const sessions = [launch.mailboxSession, target?.launchId === launchId ? target.session : null,
+      pending && JSON.parse(pending.payload).session].filter(Boolean);
+    // Pending requests bind the conversation before host validation publishes a target.
+    // Commit revocation before reporting rejection; throwing inside tx would undo it.
+    if (sessions.some(session => session !== payload.session)) {
+      launch.registrationRevoked = true;
+      store.db.prepare('UPDATE launches SET record=? WHERE team=? AND name=?').run(JSON.stringify(launch),team,who);
+      store.db.prepare('UPDATE agents SET target=NULL,generation=?,lease=NULL,lease_until=0,error=? WHERE team=? AND name=?')
+        .run(randomUUID(),'launch registration revoked after session UUID change; explicitly stop and resume in a new managed launch',team,who);
+      store.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(launchId);
+      rejected = 'launch registration revoked after session UUID change; explicitly stop and resume in a new managed launch; unread mailbox retained';
+      return;
+    }
+    if (!launch.mailboxSession) {
+      launch.mailboxSession = payload.session;
+      store.db.prepare('UPDATE launches SET record=? WHERE team=? AND name=?').run(JSON.stringify(launch),team,who);
+    }
+    if (target?.launchId === launchId) return; // Duplicate SessionStart preserves progress.
     store.db.prepare(`INSERT INTO pending_registrations(launch_id,team,name,payload,created) VALUES(?,?,?,?,?)
       ON CONFLICT(launch_id) DO UPDATE SET payload=excluded.payload,error=NULL,created=excluded.created`)
       .run(launchId,team,who,encoded,Date.now());
@@ -62,6 +62,7 @@ export function reconcileRegistrations(store) {
       const row = store.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(request.team,request.name);
       const launch = row && JSON.parse(row.record);
       if (!launch || launch.id !== request.launch_id) throw Error('launch reservation changed');
+      if (launch.registrationRevoked) throw Error('launch registration revoked');
       if (launch.phase === 'launching' && alive(launch.starter)) continue;
       if (launch.phase !== 'running' || !alive(launch) || !launch.agent || !alive(launch.agent)) throw Error('managed agent is not running');
       observeServer(launch); // External I/O stays outside SQLite transactions.
@@ -84,6 +85,7 @@ export async function waitReady(store, team, who, launchId, timeoutMs) {
     reconcileRegistrations(store);
     const launch = readLaunch(store,team,who);
     if (!launch || launch.id !== launchId) throw Error('launch changed while waiting');
+    if (launch.registrationRevoked) throw Error('launch registration revoked; explicitly stop and resume in a new managed launch');
     const row = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(team,who);
     const target = row?.target && JSON.parse(row.target);
     if (target?.launchId === launchId && store.targetAlive(team,who,target)) return;
