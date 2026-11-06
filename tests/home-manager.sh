@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export SEATWIRE_SOURCE="$(pwd)"
+bash tests/home-manager-hook-conflicts.sh
 test_root="$(mktemp -d /tmp/seatwire-hm.XXXXXX)"
 trap 'rm -rf "$test_root"' EXIT
 export SEATWIRE_TEST_HOME="$test_root/home"

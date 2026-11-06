@@ -43,6 +43,8 @@ in {
         message = "seatwire Codex integration requires enabled, immutable Home Manager settings."; }
       { assertion = !cfg.codexHooksFile || (!cfg.integrateCodex && (lib.attrByPath [ "programs" "codex" "settings" "hooks" ] { } config) == { });
         message = "seatwire codexHooksFile cannot be combined with integrateCodex or programs.codex.settings.hooks; use one hook source."; }
+      { assertion = !cfg.codexHooksFile || !config.programs.codex.enable || config.programs.codex.hooks == { };
+        message = "seatwire codexHooksFile cannot be combined with programs.codex.hooks when Codex is enabled; select one hooks.json owner (attribute set, file or directory)."; }
       { assertion = cfg.codexExecutable == null || lib.hasPrefix "/" cfg.codexExecutable;
         message = "programs.seatwire.codexExecutable must be an absolute path."; }
       { assertion = !(cfg.claudePlugin && cfg.integrateClaude);

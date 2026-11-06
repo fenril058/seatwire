@@ -191,7 +191,8 @@ Opening the store reports the directory or database when writes are denied, inst
 This serves users whose Claude settings are not managed by Home Manager without editing `settings.json`.
 Claude loads user skills-directory plugins in place without a trust prompt and rejects component symlinks that leave the plugin, so the module builds a directory of regular files.
 The opt-in codexHooksFile option owns only ~/.codex/hooks.json and leaves runtime config, hook trust and credentials to Codex.
-It rejects inline Home Manager hook integration and relies on normal activation collision checks for pre-existing files.
+It rejects inline Home Manager hook integration and nonempty programs.codex.hooks when Codex is enabled, including file and directory sources.
+Normal activation collision checks still protect pre-existing unmanaged files.
 Other project and plugin hook sources remain the user's responsibility; the module cannot prove global uniqueness.
 A package path change updates the definition and may require review through Codex /hooks.
 Removing the option removes only its managed file; it never grants trust or deletes the mailbox database.

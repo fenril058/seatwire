@@ -100,6 +100,8 @@ Claude Code の公式ドキュメントでは、`~/.claude/skills/` 配下の `.
 移行前に既存 hook を確認し、必要な定義を保存してから利用者が衝突を解消してください。
 このオプションはファイル全体を所有するため、他の hook との自動マージは行いません。
 `integrateCodex` や `programs.codex.settings.hooks` との併用は拒否します。
+`programs.codex.enable = true` の場合、空でない `programs.codex.hooks` との併用も Nix 評価時に拒否します。
+属性集合、ファイル、ディレクトリ、文字列の Store パスのいずれも対象で、所有者を一つにするため自動マージしません。
 プロジェクトや plugin に同じ seatwire hook がある場合も、生成元を一つにしてください。
 Codex は複数 source を併合するため、配置だけで二重登録がないとは判定できません。
 
