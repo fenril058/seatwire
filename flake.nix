@@ -46,6 +46,7 @@
           # Compatibility check only; the pinned 26.12.1 predates the LTS release.
         });
         home-manager = hm { };
+        home-manager-codex-hooks = hm { programs.seatwire.codexHooksFile = true; };
         home-manager-claude-plugin = hm { programs.seatwire.claudePlugin = true; };
       });
       devShells = each (system: { default = nixpkgs.legacyPackages.${system}.mkShell { packages = [ nixpkgs.legacyPackages.${system}.nodejs_24 ]; }; });

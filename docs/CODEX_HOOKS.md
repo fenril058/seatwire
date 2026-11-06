@@ -1,0 +1,27 @@
+# Declarative Codex hook ownership
+
+The opt-in programs.seatwire.codexHooksFile option owns ~/.codex/hooks.json as a Home Manager file.
+It installs a single SessionStart handler using the package's absolute store path.
+It does not require programs.codex to manage config.toml and does not write runtime trust, credentials or agent state.
+The module rejects integrateCodex and Home Manager inline hooks when this option is selected.
+Unmanaged existing files are protected by the normal activation collision check; force replacement is not enabled.
+The option owns the entire hook file and does not merge or discard other user hooks.
+Users must review existing definitions and resolve a migration collision themselves.
+
+Codex merges hook sources across user, project, session and plugin layers.
+The module can reject conflicting declarative settings it can see, but cannot inspect all runtime sources or prove global uniqueness.
+Review /hooks after activation and remove duplicate seatwire definitions from other sources before use.
+The hook definition changes with the package store path, so an update may require a new review.
+Home Manager ownership does not make the hook trusted by Codex policy.
+See [official Codex Hooks](https://learn.chatgpt.com/docs/hooks) for source and trust semantics verified on 2026-11-06.
+
+The isolated Home Manager test passed activation, repeated application, collision protection, rejection of duplicate installers, package-path update and disable.
+It checks that exactly one SessionStart command is present, that the update changes the command, and that runtime config, credential fixtures and the seatwire database survive disable.
+The test sets systemd.user.startServices=false and uses a temporary HOME and runtime directory.
+The first test iteration failed because its derivation homeDirectory and activation HOME differed; the fixture was corrected before the successful complete run.
+Live Codex hook loading/trust and notification acceptance are not exercised.
+No real Home Manager switch or systemd service operation is performed.
+
+The config-home-manager repository is unchanged.
+Adoption there should be a separate PR after this option is available in its seatwire input, resolving its existing unmanaged hooks.json before activation.
+That adoption must retain Codex's dynamic config and trust rather than making config.toml immutable.
