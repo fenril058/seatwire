@@ -15,7 +15,8 @@ test('real tmux: literal boot prompt, resume argv, ownership refusal and forced 
  const old={...process.env};const s=new Store(join(dir,'state'));
  t.after(()=>{try{despawn(s,'test','reviewer',true);}catch{}restoreEnvironment(old);s.close();rmSync(dir,{recursive:true,force:true});});
  const fake=join(dir,'codex');const output=join(dir,'args.json');
- writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(output)},JSON.stringify({args:process.argv.slice(2),state:process.env.XDG_STATE_HOME}));\nprocess.on('SIGINT',()=>writeFileSync(${JSON.stringify(join(dir,'interrupted'))},'yes'));\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+ // Expose an incomplete marker deterministically, as observed during Nix checks.
+ writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(output)},JSON.stringify({args:process.argv.slice(2),state:process.env.XDG_STATE_HOME}));\nprocess.on('SIGINT',()=>{writeFileSync(${JSON.stringify(join(dir,'interrupted'))},'');setTimeout(()=>writeFileSync(${JSON.stringify(join(dir,'interrupted'))},'yes'),50);});\nsetInterval(()=>{},1000);\n`,{mode:0o700});
  process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
  const prompt="quote ' and $(touch MUST_NOT_EXIST)\nnext line";
  const r=launch(s,'test','reviewer','codex',{cli:resolve('src/cli.mjs'),prompt,resume:'12345678-1234-4123-8123-123456789abc'});
@@ -34,7 +35,7 @@ test('real tmux: literal boot prompt, resume argv, ownership refusal and forced 
  assert.equal(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
  s.db.prepare('UPDATE launches SET record=?').run(row.record);
  despawn(s,'test','reviewer',false);
- for(let i=0;i<50&&!existsSync(join(dir,'interrupted'));i++) await new Promise(r=>setTimeout(r,20));
+ for(let i=0;i<50&&(!existsSync(join(dir,'interrupted'))||readFileSync(join(dir,'interrupted'),'utf8')!=='yes');i++) await new Promise(r=>setTimeout(r,20));
  assert.equal(readFileSync(join(dir,'interrupted'),'utf8'),'yes');
  assert.equal(despawn(s,'test','reviewer',true).state,'stopped');
  assert.notEqual(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
