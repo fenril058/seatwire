@@ -150,6 +150,16 @@ Claude の Bash から `codex exec` を起動した場合など、子が親の�
 - `failing`: 直近の通知が失敗しています。
   `error` に理由があり、通知サービスがバックオフして再試行します。
 
+`status` と `doctor` の各 agent 行には、`notification` として通知状態と未読の内訳も表示します。
+`acceptedUnread` は通知カーソル以下の未読件数、`pendingUnread` はその後の未読件数です。
+`notification.state` は `idle`（未読なし）、`no-target`、`offline`、`in-flight`（リース中）、`failed`、`pending`、`accepted-unacknowledged`（受付済み未 ack）を区別します。
+受付済み未読と新着が混在する場合は `pending` など現在の試行状態を示し、両方の件数を残します。
+`online: null` は生存不明であり、`pending` でも受信者が稼働中とは限りません。
+`in-flight` は DB のリース状態であり、外部 I/O が進んでいる証明ではありません。
+受付は transport が成功と返したことを示し、内容取得や処理完了を示しません。
+過去の `error` は履歴として残ることがあり、未試行の未読がなければ `failed` にはしません。
+未読への自動再送は追加せず、必要なら原因を直して `retry NAME` を実行してください。
+
 Claude Code の `/clear` は、同じプロセス・同じ messaging socket のまま新しいセッション UUID を開始します。
 新しいセッションが登録されると、同じプロセスとソケットを持つ以前のセッションの登録からは通知先だけを外します。
 以前のセッションのメッセージは受信箱に未読のまま残り、新しい会話へは通知しません。
