@@ -26,6 +26,7 @@ in {
     package = lib.mkOption { type = lib.types.package; default = self.packages.${pkgs.stdenv.hostPlatform.system}.default; };
     integrateClaude = lib.mkEnableOption "merge seatwire SessionStart into Home Manager Claude settings";
     integrateCodex = lib.mkEnableOption "merge seatwire SessionStart into Home Manager Codex settings";
+    codexHooksFile = lib.mkEnableOption "a dedicated ~/.codex/hooks.json without changing Codex settings or hook trust";
     claudePlugin = lib.mkEnableOption "a Claude Code skills-directory plugin at ~/.claude/skills/seatwire whose SessionStart hook registers each Claude session, without changing Claude settings";
     codexExecutable = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -40,6 +41,10 @@ in {
         message = "seatwire Claude integration requires enabled, immutable Home Manager settings."; }
       { assertion = !cfg.integrateCodex || (config.programs.codex.enable && !config.programs.codex.mutableSettings);
         message = "seatwire Codex integration requires enabled, immutable Home Manager settings."; }
+      { assertion = !cfg.codexHooksFile || (!cfg.integrateCodex && (lib.attrByPath [ "programs" "codex" "settings" "hooks" ] { } config) == { });
+        message = "seatwire codexHooksFile cannot be combined with integrateCodex or programs.codex.settings.hooks; use one hook source."; }
+      { assertion = !cfg.codexHooksFile || !config.programs.codex.enable || config.programs.codex.hooks == { };
+        message = "seatwire codexHooksFile cannot be combined with programs.codex.hooks when Codex is enabled; select one hooks.json owner (attribute set, file or directory)."; }
       { assertion = cfg.codexExecutable == null || lib.hasPrefix "/" cfg.codexExecutable;
         message = "programs.seatwire.codexExecutable must be an absolute path."; }
       { assertion = !(cfg.claudePlugin && cfg.integrateClaude);
@@ -51,6 +56,9 @@ in {
     xdg.configFile."seatwire/hooks.json".text = builtins.toJSON {
       claude = { hooks.SessionStart = [ (hook "claude-code") ]; };
       codex = { hooks.SessionStart = [ (hook "codex") ]; };
+    };
+    home.file.".codex/hooks.json" = lib.mkIf cfg.codexHooksFile {
+      text = builtins.toJSON { hooks.SessionStart = [ (hook "codex") ]; };
     };
     programs.claude-code.settings = lib.mkIf cfg.integrateClaude { hooks.SessionStart = [ (hook "claude-code") ]; };
     programs.codex.settings = lib.mkIf cfg.integrateCodex { hooks.SessionStart = [ (hook "codex") ]; };

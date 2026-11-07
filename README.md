@@ -92,6 +92,25 @@ Claude Code の公式ドキュメントでは、`~/.claude/skills/` 配下の `.
 管理設定（managed settings）で skills ディレクトリのプラグインが禁止されている環境では読み込まれません。
 有効化後に起動した Claude で `/plugin` を開くと、`seatwire@skills-dir` を確認できます。
 
+### Codex の独立 hook ファイルを管理する場合
+
+`programs.seatwire.codexHooksFile = true;` は `~/.codex/hooks.json` だけを配置します。
+`programs.codex` の有効化は必須ではなく、`config.toml` の trust や認証ファイルは変更しません。
+既存の `hooks.json` は上書きせず、Home Manager の衝突検査で停止します。
+移行前に既存 hook を確認し、必要な定義を保存してから利用者が衝突を解消してください。
+このオプションはファイル全体を所有するため、他の hook との自動マージは行いません。
+`integrateCodex` や `programs.codex.settings.hooks` との併用は拒否します。
+`programs.codex.enable = true` の場合、空でない `programs.codex.hooks` との併用も Nix 評価時に拒否します。
+属性集合、ファイル、ディレクトリ、文字列の Store パスのいずれも対象で、所有者を一つにするため自動マージしません。
+プロジェクトや plugin に同じ seatwire hook がある場合も、生成元を一つにしてください。
+Codex は複数 source を併合するため、配置だけで二重登録がないとは判定できません。
+
+有効化・更新後は Codex の `/hooks` で定義を確認し、必要な review/trust を行ってください。
+コマンドは Nix Store のパスを含み、更新で定義が変わると再レビューが必要です。
+Home Manager による配置は、Codex の管理ポリシーによる trust を意味しません。
+無効化でこの hook ファイルを撤去し、動的設定と seatwire DB は残します。
+詳細な source と trust の規則は [Codex Hooks](https://learn.chatgpt.com/docs/hooks) を参照してください。
+
 ### Codex のフックを手で追加する場合
 
 Codex の設定を Home Manager で管理していない場合、`~/.codex/hooks.json` の `SessionStart` にフックを追加し、Codex の `/hooks` で信頼してください。

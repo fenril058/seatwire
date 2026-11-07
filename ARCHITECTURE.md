@@ -209,7 +209,12 @@ Opening the store reports the directory or database when writes are denied, inst
 `programs.seatwire.claudePlugin` installs the skill as a Claude Code skills-directory plugin whose SessionStart hook runs the same package.
 This serves users whose Claude settings are not managed by Home Manager without editing `settings.json`.
 Claude loads user skills-directory plugins in place without a trust prompt and rejects component symlinks that leave the plugin, so the module builds a directory of regular files.
-Codex has no comparable declarative path for an unmanaged `~/.codex/hooks.json`; the README documents a manual hook and the trade-off between a store path and a stable profile path.
+The opt-in codexHooksFile option owns only ~/.codex/hooks.json and leaves runtime config, hook trust and credentials to Codex.
+It rejects inline Home Manager hook integration and nonempty programs.codex.hooks when Codex is enabled, including file and directory sources.
+Normal activation collision checks still protect pre-existing unmanaged files.
+Other project and plugin hook sources remain the user's responsibility; the module cannot prove global uniqueness.
+A package path change updates the definition and may require review through Codex /hooks.
+Removing the option removes only its managed file; it never grants trust or deletes the mailbox database.
 
 The agmsg revision checked during this revision was `318b082b86508dbbc422fe709b46cac2fc99e25c`.
 The two vendored I/O modules are unchanged since `7082fc03f3a6e3f8d5375bb07bec6b39a674a79b`, so the vendored copies were not updated.
