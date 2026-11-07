@@ -187,7 +187,12 @@ export class Store {
       && launch.agent?.witness === target.witness && launch.agent?.pid === target.pid;
   }
   status() {
-    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures,retry_at,lease_until,(SELECT count(*) FROM messages m WHERE m.team=agents.team AND m.recipient=agents.name AND read_at IS NULL) AS unread FROM agents').all().map(({target,...r})=>({...r,online:target?this.targetOnline(r.team,r.name,JSON.parse(target)):false}));
+    return this.db.prepare('SELECT team,name,kind,target,error,notified,failures,retry_at,lease_until,(SELECT count(*) FROM messages m WHERE m.team=agents.team AND m.recipient=agents.name AND read_at IS NULL) AS unread,(SELECT count(*) FROM messages m WHERE m.team=agents.team AND m.recipient=agents.name AND read_at IS NULL AND id<=agents.notified) AS acceptedUnread FROM agents').all().map(({target,acceptedUnread,...r})=>{
+      const online=target?this.targetOnline(r.team,r.name,JSON.parse(target)):false;
+      const pendingUnread=r.unread-acceptedUnread;
+      const state=!r.unread?'idle':!target?'no-target':online===false?'offline':!pendingUnread?'accepted-unacknowledged':r.lease_until>Date.now()?'in-flight':r.error?'failed':'pending';
+      return {...r,online,notification:{state,acceptedUnread,pendingUnread}};
+    });
   }
   close(){ this.db.close(); }
 }

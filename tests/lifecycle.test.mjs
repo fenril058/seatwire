@@ -97,3 +97,33 @@ test('a new Claude session in the same process takes over its socket without tak
   store.register('default','claude-code-before','claude-code',before);
   assert.equal(store.claim().name,'claude-code-before');
 });
+
+test('status separates accepted unread from pending, in-flight, failed and acknowledged messages',t=>{
+  const {store}=fixture(t);
+  const state=()=>store.status().find(a=>a.name==='receiver').notification;
+  assert.equal(state().state,'idle');
+  const first=store.send('default','sender','receiver','first');
+  assert.deepEqual(state(),{state:'pending',acceptedUnread:0,pendingUnread:1});
+  const claim=store.claim();assert.equal(state().state,'in-flight');
+  store.finish(claim,null);
+  assert.deepEqual(state(),{state:'accepted-unacknowledged',acceptedUnread:1,pendingUnread:0});
+  assert.equal(store.inbox('default','receiver')[0].read_at,null);
+  const second=store.send('default','sender','receiver','second');
+  assert.deepEqual(state(),{state:'pending',acceptedUnread:1,pendingUnread:1});
+  store.finish(store.claim(),'fixture failure');assert.equal(state().state,'failed');
+  store.ack('default','receiver',[second]);
+  assert.equal(state().state,'accepted-unacknowledged');
+  store.ack('default','receiver',[first]);assert.equal(state().state,'idle');
+});
+
+test('status keeps unknown liveness distinct from offline and missing targets',t=>{
+  const {store,target}=fixture(t);
+  store.send('default','sender','receiver','pending');
+  store.register('default','receiver','codex',{...target,pidNamespace:'pid:[other]'});
+  let row=store.status().find(a=>a.name==='receiver');
+  assert.equal(row.online,null);assert.equal(row.notification.state,'pending');
+  store.db.prepare("UPDATE agents SET target=json_set(target,'$.pidNamespace',NULL,'$.witness','expired') WHERE name='receiver'").run();
+  assert.equal(store.status().find(a=>a.name==='receiver').notification.state,'offline');
+  store.db.prepare("UPDATE agents SET target=NULL WHERE name='receiver'").run();
+  assert.equal(store.status().find(a=>a.name==='receiver').notification.state,'no-target');
+});

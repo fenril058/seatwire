@@ -196,6 +196,14 @@ Codex targets are not superseded this way because a queue item names its thread 
 
 `send` and `reply` report the recipient's notification state from the sender's view: pending, none, recipient not running or failing.
 These states describe whether the host will try to prompt the recipient, not whether it processed the message.
+
+Agent status includes an additive notification object with state, acceptedUnread and pendingUnread.
+Both counts are read in the same SQLite statement as the notification cursor and total unread count.
+Accepted unread messages have IDs at or below the successful transport cursor; they are not processing receipts.
+Liveness remains a separate true/false/null value.
+An active lease indicates in-flight work or an unexpired abandoned claim, not proof of active I/O.
+No automatic repeat notifications or acknowledgement changes are introduced.
+
 Opening the store reports the directory or database when writes are denied, instead of the generic SQLite or recursive mkdir error, and does not change sandbox settings.
 
 `programs.seatwire.claudePlugin` installs the skill as a Claude Code skills-directory plugin whose SessionStart hook runs the same package.
