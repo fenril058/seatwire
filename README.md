@@ -279,8 +279,17 @@ Claude から spawn した Codex に、親 Claude の通知用ソケットとト
 エージェントの終了を最大 10 秒待ち、終了を確認できれば `stopped`、できなければ `forced stop requested; agent still exiting` を返します。
 エージェントが生きている間は同じ名前の spawn を拒否するため、`stopped` の後は同じ名前ですぐに `--resume` できます。
 終了した起動記録が残っている場合、despawn で整理してから再度 spawn します。
-`/clear` による別 UUID への切り替えは生存中の所有者変更として拒否します。
-その場合はセッション終了後に起動し直してください。
+管理下 launch で異なる session UUID を観測すると、初回 pending を含め、その launch の自動通知登録を失効させます。
+旧通知先と通知リース、pending request を同じ transaction で無効化し、未読と ack 履歴は保持します。
+失効は DB の launch レコードに保存し、同じ launch 内では元 UUID の古い SessionStart も `source: resume` の入力も復旧に使いません。
+これらの入力だけでは古いイベントの再送と正規 resume を区別できないためです。
+復旧には、明示的に旧 launch を終了してから、新しい managed launch で元 UUID を resume してください。
+旧 launch が終了していない場合は、停止を確認するまで同じ名前での復旧を進めないでください。
+同一 UUID の通常の重複 SessionStart は通知進捗を維持します。
+固定名の mailbox を新 UUID に自動継承することはありません。
+失効前に claim を取得した worker の外部 I/O は、失効後に実行または完了する可能性があり、取り消せません。
+その worker の完了による DB 書き戻しは generation / lease fencing で拒否します。
+詳細は [会話切り替えの設計](docs/SESSION_SWITCH.md) を参照してください。
 
 ## 更新・無効化・データ
 

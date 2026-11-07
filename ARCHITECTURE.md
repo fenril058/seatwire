@@ -181,6 +181,17 @@ A Claude Code process keeps one messaging socket, inode and token across /clear 
 A notification addressed to the earlier session would reach the new conversation, which has no claim to that mailbox.
 Registering a Claude session therefore removes the notification target of other registrations with the same process witness and socket.
 Their messages and receipts remain, status records which session took over, and a later resume registers the earlier session again.
+
+Managed launches bind their first observed UUID, including a pending registration before a target is published.
+A different UUID permanently revokes automatic registration for that launch in its existing JSON record.
+Revocation commits before the hook reports an error, clears the target, lease and pending request, and changes the generation.
+Old SessionStart events and claimed resume events cannot restore that launch, because their provenance cannot be distinguished.
+Recovery requires explicitly stopping the old launch and resuming the original UUID in a new managed launch through host process, launch and socket validation.
+Launch publication preserves registration metadata written concurrently by startup hooks.
+Reconciliation compares the launch record and pending payload and checks revocation again inside the registration transaction.
+A previously claimed notification can still execute or finish external I/O after revocation, but its DB completion is fenced.
+See [session switching](docs/SESSION_SWITCH.md) for verification limits.
+
 Codex targets are not superseded this way because a queue item names its thread and a shared app-server serves several threads.
 
 `send` and `reply` report the recipient's notification state from the sender's view: pending, none, recipient not running or failing.

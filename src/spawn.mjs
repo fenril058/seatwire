@@ -18,9 +18,14 @@ export function readLaunch(store, team, who) {
   return row ? JSON.parse(row.record) : null;
 }
 export function updateLaunch(store, team, who, id, record) {
-  const result = store.db.prepare("UPDATE launches SET record=? WHERE team=? AND name=? AND json_extract(record,'$.id')=?")
-    .run(JSON.stringify(record), team, who, id);
-  if (!result.changes) throw Error('launch reservation changed');
+  store.tx(() => {
+    const current = readLaunch(store,team,who);
+    if (!current || current.id !== id) throw Error('launch reservation changed');
+    // SessionStart may bind or revoke registration while tmux is still starting.
+    const next = {...record};
+    for (const key of ['mailboxSession','registrationRevoked']) if (key in current) next[key] = current[key];
+    store.db.prepare('UPDATE launches SET record=? WHERE team=? AND name=?').run(JSON.stringify(next),team,who);
+  });
 }
 function forget(store, team, who, record) {
   store.db.prepare('DELETE FROM launches WHERE team=? AND name=? AND record=?').run(team, who, JSON.stringify(record));
@@ -123,6 +128,6 @@ export function launchStatus(store) {
     const agent = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(row.team,row.name);
     const target = agent?.target && JSON.parse(agent.target);
     const ready = target?.launchId === r.id && store.targetAlive(row.team,row.name,target);
-    return { ...row, kind: r.kind, phase: r.phase || 'running', running: alive(r), agentRunning: r.agent ? alive(r.agent) : null, registration: ready ? 'ready' : pending?.error ? 'failed' : 'pending', abandoned: r.phase === 'launching' && !alive(r.starter), socket: r.socket, error: r.error || pending?.error || null };
+    return { ...row, kind: r.kind, phase: r.phase || 'running', running: alive(r), agentRunning: r.agent ? alive(r.agent) : null, registration: r.registrationRevoked ? 'revoked' : ready ? 'ready' : pending?.error ? 'failed' : 'pending', abandoned: r.phase === 'launching' && !alive(r.starter), socket: r.socket, error: r.error || pending?.error || null };
   });
 }
