@@ -55,10 +55,10 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
   try {
     let result;
     if (['send','inbox','history','ack','reply','whoami'].includes(command)) {
-      const identity = currentIdentity(store, {team, who});
+      const identity = currentIdentity(store, {team, who:v.name});
       team = identity.team; who = identity.name;
     }
-    if (!team && ['peers','spawn','despawn','retry'].includes(command)) team = currentIdentity(store, {who, required:false})?.team;
+    if (!team && ['peers','spawn','despawn','retry'].includes(command)) team = currentIdentity(store, {who:v.name, required:false})?.team;
     team ||= 'default';
     switch(command) {
       case 'spawn': {
