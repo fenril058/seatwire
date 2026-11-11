@@ -30,6 +30,15 @@ export function currentIdentity(store, {team, who, env = process.env, required =
   if (sessions.some(id => !UUID.test(id))) throw Error('invalid session UUID in environment');
   // A nested agent can inherit its parent's variable, so several sessions never select one.
   if (sessions.length > 1) throw Error('ambiguous session identity: several agent session UUIDs in environment; select --team and --name');
+  const inherited = env.SEATWIRE_NAME;
+  if (inherited) {
+    const identity = {team: team || 'default', name: inherited};
+    if (!sessions.length) return identity; // Preserve explicit offline environment roles.
+    const row = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(identity.team,inherited);
+    if (!row?.target) throw Error('session is not registered for SEATWIRE_NAME; wait for host registration or select --team and --name explicitly');
+    if (JSON.parse(row.target).session !== sessions[0]) throw Error('session UUID does not match inherited SEATWIRE_NAME; select --team and --name explicitly');
+    return identity;
+  }
   let candidates = store.db.prepare('SELECT team,name,kind,target FROM agents WHERE target IS NOT NULL').all()
     .filter(row => !team || row.team === team);
   if (sessions.length) candidates = candidates.filter(row => sessions.includes(JSON.parse(row.target).session));
