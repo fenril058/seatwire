@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,writeFileSync,rmSync } from 'node:fs';
+import { mkdtempSync,writeFileSync,readFileSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCodexQueue } from '../vendor/agmsg/codex-queue-io.mjs';
@@ -15,4 +15,26 @@ test('queue subprocess contract, exact destination and bounded timeout',async t=
  assert.equal((await run()).reason,'queue_output_unrecognized');
  writeFileSync(executable,`#!${process.execPath}\nsetInterval(()=>{},1000);\n`);
  const start=Date.now();assert.equal((await run()).kind,'timeout');assert.ok(Date.now()-start<4000);
+});
+test('missing queue executable is reported as a start failure',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'sw-queue-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const starts=[];
+ const result=await runCodexQueue({executable:join(dir,'missing-codex'),codexHome:dir,thread,message:'inbox',timeoutMs:1000,onChildStart:pid=>starts.push(pid)});
+ assert.equal(result.kind,'failed');
+ assert.equal(result.started,false);
+ assert.match(result.reason,/^spawn_failed:ENOENT: /);
+ assert.equal(result.queueItemId,undefined);
+ assert.deepEqual(starts,[]);
+});
+test('non-zero exit is not accepted even when stdout looks queued',async t=>{
+ const dir=mkdtempSync(join(tmpdir(),'sw-queue-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ const executable=join(dir,'queue'),marker=join(dir,'ran');
+ const run=()=>runCodexQueue({executable,codexHome:dir,thread,message:'inbox',timeoutMs:1000});
+ const script=code=>`#!${process.execPath}\nprocess.getBuiltinModule('node:fs').writeFileSync(${JSON.stringify(marker)},String(${code}));\nconsole.log('Queued message 12345678-1234-4123-8123-123456789abd for thread '+process.argv[4]+'.');\nprocess.exitCode=${code};\n`;
+ writeFileSync(executable,script(0),{mode:0o700});
+ assert.deepEqual(await run(),{kind:'queued',queueItemId:'12345678-1234-4123-8123-123456789abd'});
+ writeFileSync(executable,script(3));
+ const result=await run();
+ assert.equal(readFileSync(marker,'utf8'),'3');
+ assert.deepEqual(result,{kind:'failed',reason:'queue_exit_3'});
 });
