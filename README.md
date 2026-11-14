@@ -286,6 +286,23 @@ seatwire --team demo spawn codex reviewer --resume SESSION_UUID
 タイムアウト時もエージェントは残るため、`seatwire status` の `registration` と `error`、tmux 内の信頼確認を確認してください。
 信頼確認には別の端末から tmux に接続できます。
 
+`status` と `doctor` の `launches` は、既存の `registration` 値を維持し、補足の `registrationDetail` を返します。
+
+| registration | registrationDetail | 観測した状態 |
+| --- | --- | --- |
+| `pending` | `request-not-received` | 現在の launch に申請、セッション UUID、通知先の記録がない |
+| `pending` | `awaiting-host-validation` | 申請が届き、ホスト照合を待っている |
+| `pending` | `session-observed` | セッションの記録はあるが、待機中の申請がなく ready を確認できない |
+| `failed` | `request-error` | 申請に照合エラーが記録されている |
+| `ready` | `ready` | 既存の判定で登録先の生存を確認できる |
+| `revoked` | `revoked` | launch の登録が失効している |
+
+`--wait-ready` の timeout は最後に観測した詳細状態と確認先を示します。
+申請未着なら、最初のターンが開始済みか、SessionStart Hook の配置と trust、Hook の環境継承と state 指定を確認してください。
+申請未着だけで trust 不足とは判断できません。
+`--wait-ready` 自身もホスト照合を行うため、照合待ちを worker 停止とは判断しません。
+タイムアウトまでに状態確認を一度も完了できなかった場合は、`not-observed` と表示します。
+
 spawn は DB に起動を予約してコミットしてから tmux を呼び出すため、起動中のフックによる書き込みをロックしません。
 フックは起動 ID とセッション ID を DB に申請し、ホストの daemon または `--wait-ready` が専用 tmux サーバーとエージェントのプロセス開始情報を照合します。
 フック自身がホストの親プロセスを探す必要はありません。
