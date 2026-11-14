@@ -286,7 +286,7 @@ seatwire --team demo spawn codex reviewer --resume SESSION_UUID
 タイムアウト時もエージェントは残るため、`seatwire status` の `registration` と `error`、tmux 内の信頼確認を確認してください。
 信頼確認には別の端末から tmux に接続できます。
 
-`status` と `doctor` の `launches` は、既存の `registration` 値を維持し、補足の `registrationDetail` を返します。
+`status` の `launches` は、既存の `registration` 値を維持し、補足の `registrationDetail` を返します。
 
 | registration | registrationDetail | 観測した状態 |
 | --- | --- | --- |
