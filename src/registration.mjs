@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { name, alive, socketWitness, pidNamespace } from './identity.mjs';
-import { readLaunch, observeServer } from './spawn.mjs';
+import { readLaunch, observeServer, registrationDetail } from './spawn.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 function absolute(value) {
@@ -81,6 +81,7 @@ export function reconcileRegistrations(store) {
 export async function waitReady(store, team, who, launchId, timeoutMs) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300000) throw Error('ready timeout must be 1..300000 ms');
   const deadline = Date.now() + timeoutMs;
+  let lastDetail = 'not-observed';
   while (Date.now() < deadline) {
     reconcileRegistrations(store);
     const launch = readLaunch(store,team,who);
@@ -90,9 +91,17 @@ export async function waitReady(store, team, who, launchId, timeoutMs) {
     const target = row?.target && JSON.parse(row.target);
     if (target?.launchId === launchId && store.targetAlive(team,who,target)) return;
     const request = store.db.prepare('SELECT error FROM pending_registrations WHERE launch_id=?').get(launchId);
+    lastDetail = registrationDetail('pending',request,!!(launch.mailboxSession || (target && target.launchId === launchId)));
     if (request?.error) throw Error(`registration failed: ${request.error}`);
     if (launch.agent && !alive(launch.agent)) throw Error('agent exited before registration');
     await new Promise(r=>setTimeout(r,100));
   }
-  throw Error('registration timed out; launched agent retained (inspect status and hook trust)');
+  const guidance = lastDetail === 'request-not-received'
+    ? 'No SessionStart request was observed. Check whether the first turn has started, SessionStart hook installation/trust, and the hook environment (SEATWIRE_LAUNCH_ID, SEATWIRE_TEAM, SEATWIRE_NAME and selected state-home).'
+    : lastDetail === 'awaiting-host-validation'
+      ? 'A request was received. Check the launch phase, process identity and registration errors in status; this wait performs host validation itself.'
+      : lastDetail === 'session-observed'
+        ? 'Session metadata was recorded, but no request is pending and readiness was not confirmed. Inspect status and the recorded process identity.'
+        : 'No registration check completed before timeout; inspect status.';
+  throw Error(`registration timed out; launched agent retained; last observed registration: ${lastDetail}. ${guidance}`);
 }

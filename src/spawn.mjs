@@ -121,6 +121,10 @@ export function despawn(store, team, who, force) {
   tmux(record.socket, ['send-keys', '-t', '%0', 'C-c']);
   return { state: 'interrupt requested; inspect/exit the agent normally, or explicitly use --force', socket: record.socket };
 }
+export function registrationDetail(registration, request, sessionObserved = false) {
+  if (registration === 'pending') return request ? 'awaiting-host-validation' : sessionObserved ? 'session-observed' : 'request-not-received';
+  return registration === 'failed' ? 'request-error' : registration;
+}
 export function launchStatus(store) {
   return store.db.prepare('SELECT team,name,record FROM launches').all().map(({ record, ...row }) => {
     const r = JSON.parse(record);
@@ -128,6 +132,7 @@ export function launchStatus(store) {
     const agent = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(row.team,row.name);
     const target = agent?.target && JSON.parse(agent.target);
     const ready = target?.launchId === r.id && store.targetAlive(row.team,row.name,target);
-    return { ...row, kind: r.kind, phase: r.phase || 'running', running: alive(r), agentRunning: r.agent ? alive(r.agent) : null, registration: r.registrationRevoked ? 'revoked' : ready ? 'ready' : pending?.error ? 'failed' : 'pending', abandoned: r.phase === 'launching' && !alive(r.starter), socket: r.socket, error: r.error || pending?.error || null };
+    const registration = r.registrationRevoked ? 'revoked' : ready ? 'ready' : pending?.error ? 'failed' : 'pending';
+    return { ...row, kind: r.kind, phase: r.phase || 'running', running: alive(r), agentRunning: r.agent ? alive(r.agent) : null, registration, registrationDetail: registrationDetail(registration,pending,!!(r.mailboxSession || (target && target.launchId === r.id))), abandoned: r.phase === 'launching' && !alive(r.starter), socket: r.socket, error: r.error || pending?.error || null };
   });
 }
