@@ -22,6 +22,7 @@ The pinned Nix Node runtime supplies SQLite; the package includes tmux for optio
 `cli.mjs` exposes explicit CLI operations and lifecycle hook registration.
 `spawn.mjs` owns launch reservations and tmux identity checks.
 `registration.mjs` accepts managed hook requests and verifies them on the host.
+`worker.mjs` records optional per-process heartbeats and reads bounded diagnostic observations.
 Nix owns executable code, skills, hooks configuration fragments and the user service.
 No installer modifies agent configuration.
 
@@ -203,6 +204,24 @@ Accepted unread messages have IDs at or below the successful transport cursor; t
 Liveness remains a separate true/false/null value.
 An active lease indicates in-flight work or an unexpired abandoned claim, not proof of active I/O.
 No automatic repeat notifications or acknowledgement changes are introduced.
+
+Worker observations are additive to status, doctor, send and reply and never change notification states.
+Each daemon writes its own private, versioned JSON record beside the database; SQLite remains schema 2.
+Loop updates are throttled to five seconds, and thirty seconds without an update means stale activity, not confirmed process exit.
+PID observations require matching PID namespaces and a procfs view matching the observer's numeric PID.
+The observer's NSpid must contain only its own PID, excluding ancestor procfs views without requiring access to PID 1.
+Observation errors remain unknown; process start witnesses, boot identity and zombies distinguish replaced or exited processes.
+A stopped record can also mean the worker loop ended while the process has not exited yet.
+Single-run records retain their last activity but are excluded from continuous worker availability.
+Multiple records are evaluated separately before aggregation; an older worker may emit no record at all.
+No observation proves transport acceptance, inbox retrieval or acknowledgement.
+
+Readers inspect at most 128 directory entries and 4096 bytes per record, using no-follow nonblocking opens and private regular-file checks.
+Limit excess, invalid records and read errors make the observation incomplete; positive recent observations can still be reported with complete=false.
+Diagnostics never delete records, mutate message state, or restart workers.
+A failed reporter warns once and disables its own updates without stopping notification work.
+Its last record and at most one unfinished temporary file remain; no automatic garbage collection is performed.
+Old schema-2 binaries ignore these files, and missing records cannot establish that no worker is running.
 
 Opening the store reports the directory or database when writes are denied, instead of the generic SQLite or recursive mkdir error, and does not change sandbox settings.
 
