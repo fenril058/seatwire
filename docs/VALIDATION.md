@@ -438,3 +438,35 @@ Not verified in this revision:
 - A Codex `shell_environment_policy` that filters the hook environment; such a filter would drop the launch ID, and the launch would stay pending.
 - Whether one Codex review stays valid across a seatwire update; a changed store path is expected to need a new review.
 - The systemd service delivering to real agents; these runs invoked `daemon --once` by hand.
+
+## Worker diagnostics revision (2026-11-15)
+
+The three primary CLI regressions were run against ada057efbb7bec285a6b8533fecfd6a6e0170f80 in a temporary checkout.
+They failed at the expected worker state assertions because the worker observation was absent, after message persistence assertions had succeeded.
+They passed after implementation, including missing records, stale updates, stopped loops, invalid records and independent namespace observations.
+
+The host Node.js 24.18.0 suite passed all 74 tests with inherited agent identity variables removed.
+The initial sandbox test runner did not expose child-test details; the same tests were rerun through approved host execution.
+The existing sender notification strings, per-agent notification states, cursor counts and explicit acknowledgements remain covered by the full suite.
+Isolated daemon tests observed two workers updating separate files, graceful exit, forced process exit and unchanged database rows while idle.
+The recording-failure fixture still accepted a queue notification and retained its message unread.
+Metadata tests cover exact size and entry limits, overflow, unknown formats, symlinks, clock boundaries and observation errors.
+
+The x86_64-linux Nix flake checks passed, including all 74 tests under the pinned Node.js 24 and 26 runtimes and the three Home Manager configuration builds.
+The sandbox could not connect to the Nix daemon socket; the checks succeeded through approved host execution.
+aarch64-linux was omitted by the host-system check.
+No Home Manager activation or service update was performed.
+
+A separate temporary state was shared between the ada057e CLI and the new CLI with a heartbeat file present.
+The old CLI sent a message, the new CLI read it and replied, and the old CLI read and acknowledged that reply.
+The schema remained 2, and the old CLI continued to read status without interpreting the new files.
+
+An actual child PID namespace was created with unshare using a temporary state and a Node observer, without starting an agent.
+The child observed the host heartbeat as recent and its process availability as null with pid-namespace-unavailable.
+The same host environment denied access to /proc/1/ns/pid, so procfs comparability uses the observer's own NSpid instead of requiring PID 1 access.
+The NSpid interpretation follows [proc_pid_status(5)](https://man7.org/linux/man-pages/man5/proc_pid_status.5.html).
+This proves the tested namespace boundary, not every agent sandbox configuration.
+
+No production database, worker, Home Manager generation, hook trust or real agent session was operated on.
+The temporary compatibility state and test daemons were cleaned up.
+No heartbeat record garbage collection or Issue 6 socket deletion was introduced.

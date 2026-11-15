@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { launch, despawn, launchStatus } from './spawn.mjs';
 import { submitRegistration, reconcileRegistrations, waitReady } from './registration.mjs';
 import { tick } from './notify.mjs';
+import { startWorker, workerStatus } from './worker.mjs';
 import { sessionId, automaticName, currentIdentity, projectPath } from './context.mjs';
 function absolute(v) { if (!isAbsolute(v || '') || /[\x00-\x1f]/.test(v)) throw Error('invalid absolute path'); return v; }
 export function registration(kind, input={}, env=process.env) {
@@ -94,10 +95,24 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
       case 'daemon': {
         let stop=false;
         process.on('SIGTERM',()=>{stop=true;}); process.on('SIGINT',()=>{stop=true;});
-        do { reconcileRegistrations(store); const work=await tick(store); if(v.once) break; if(!work) await new Promise(r=>setTimeout(r,1000)); } while(!stop);
+        const worker=startWorker(dirname(store.path),{once:v.once});
+        try {
+          do {
+            worker.update();
+            reconcileRegistrations(store); const work=await tick(store);
+            worker.update();
+            if(v.once) break;
+            if(!work) await new Promise(r=>setTimeout(r,1000));
+          } while(!stop);
+        } finally { worker.stop(); }
         return;
       }
       default: throw Error(`unknown command: ${command}`);
+    }
+    if (['send','reply','status','doctor'].includes(command)) {
+      result.worker=workerStatus(dirname(store.path));
+      if (['send','reply'].includes(command)) result.detail=
+        `${['pending','failing'].includes(result.notification)?'Message saved; recipient notification state does not establish worker availability.':result.detail} ${result.worker.detail}`;
     }
     console.log(JSON.stringify(result,null,2));
   } finally { store.close(); }
