@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, chmodSync, symlinkSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -200,4 +200,25 @@ test('worktree root observation preserves spaces in directory names',t=>{
   f.git('-C',f.repo,'worktree','add','--quiet','-b','spaced',spaced);f.map({[spaced]:'trial'});
   const r=f.hook(randomUUID(),{cwd:spaced});assert.equal(r.status,0,r.stderr);
   assert.equal(f.rows()[0].team,'trial');assert.equal(JSON.parse(f.rows()[0].target).project,spaced);
+});
+
+test('missing Git metadata in a configured root never falls back to legacy registration',t=>{
+  const f=fixture(t);f.map({[f.worktree]:'trial'});
+  renameSync(join(f.worktree,'.git'),join(f.worktree,'.git-disabled'));
+  const r=f.hook(randomUUID(),{input:{source:undefined}});
+  assert.equal(f.rows().length,0);assert.equal(r.status,1);assert.match(r.stderr,/observe/);
+});
+
+test('metadata loss cannot select an enclosing checkout instead of the configured worktree',t=>{
+  const f=fixture(t),nested=join(f.repo,'trial');
+  f.git('-C',f.repo,'worktree','add','--quiet','-b','nested',nested);f.map({[nested]:'trial'});
+  renameSync(join(nested,'.git'),join(nested,'.git-disabled'));
+  const r=f.hook(randomUUID(),{cwd:nested,input:{source:undefined}});
+  assert.equal(f.rows().length,0);assert.equal(r.status,1);assert.match(r.stderr,/observe/);
+});
+
+test('a valid nested unconfigured repository does not inherit its enclosing worktree team',t=>{
+  const f=fixture(t),nested=join(f.worktree,'nested');f.git('init','--quiet',nested);f.map({[f.worktree]:'trial'});
+  const r=f.hook(randomUUID(),{cwd:nested,input:{source:undefined}});
+  assert.equal(r.status,0,r.stderr);assert.equal(f.rows()[0].team,'default');
 });

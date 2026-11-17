@@ -30,6 +30,8 @@ Hook入力cwdを正規化し、Gitの `rev-parse --show-toplevel` でそのworkt
 継承されたGIT_DIR / GIT_WORK_TREE / GIT_CONFIG_*等はGit子プロセスから除き、別のcheckoutや設定に誘導されないようにする。
 Gitの終了status・timeout・出力サイズを検査し、観測失敗をdefaultへ読み替えない。
 Git管理外と確認できたディレクトリは対応なしとする。
+設定されたrootの配下でGit metadataが失われた場合は、従来経路や外側checkoutへ読み替えず停止する。
+正当な入れ子Git repositoryは独立のrootとして扱い、親の設定を継承させない。
 共通Git directoryではなく個別worktree rootの完全一致で選択するため、専用worktreeだけを設定できる。
 rootに対応がなければ親プロジェクトのteamを継承しない。
 既存のtarget.projectはHook入力cwdのままで、peersの作業ディレクトリによる絞り込みも変えない。

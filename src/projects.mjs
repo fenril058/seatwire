@@ -36,6 +36,8 @@ export function projectTeam(cwd, env = process.env) {
   }
   if(!projects.size) return;
   const directory=absolute(cwd);
+  const within=(child,parent)=>child===parent || child.startsWith(parent.endsWith('/') ? parent : parent+'/');
+  const enclosing=[...projects.keys()].filter(root=>within(directory,root));
   // Inherited GIT_DIR/GIT_WORK_TREE must not select a different worktree.
   const gitEnv=Object.fromEntries(Object.entries(env).filter(([key])=>!key.startsWith('GIT_')));
   const result=spawnSync('git',['-c','core.fsmonitor=false','-C',directory,'rev-parse','--show-toplevel'],{
@@ -43,8 +45,10 @@ export function projectTeam(cwd, env = process.env) {
   });
   if(result.error) throw Error('cannot observe Git worktree root',{cause:result.error});
   if(result.status!==0) {
-    if(result.status===128 && /^fatal: not a git repository \(/.test(result.stderr)) return;
+    if(result.status===128 && /^fatal: not a git repository \(/.test(result.stderr) && !enclosing.length) return;
     throw Error('cannot observe Git worktree root');
   }
-  return projects.get(absolute(result.stdout.replace(/\r?\n$/,'')));
+  const root=absolute(result.stdout.replace(/\r?\n$/,''));
+  if(enclosing.some(configured=>!within(root,configured))) throw Error('cannot observe configured Git worktree root');
+  return projects.get(root);
 }
