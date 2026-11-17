@@ -29,7 +29,8 @@ test('identity resolves custom teams, refuses ambiguity and retains offline mail
   store.register('custom','reviewer','codex',target);
   const env={CODEX_THREAD_ID:session};
   assert.deepEqual(currentIdentity(store,{env}),{team:'custom',name:'reviewer'});
-  store.register('other','reviewer','codex',target);
+  // Legacy databases can contain cross-team duplicates; new registration refuses them.
+  store.db.prepare("INSERT INTO agents SELECT 'other',name,kind,target,generation,notified,lease,lease_until,retry_at,failures,error FROM agents WHERE team='custom'").run();
   assert.throws(()=>currentIdentity(store,{env}),/ambiguous/);
   assert.equal(currentIdentity(store,{env,team:'custom'}).team,'custom');
   assert.throws(()=>currentIdentity(store,{env:{CODEX_THREAD_ID:randomUUID()}}),/not registered/);
@@ -41,7 +42,7 @@ test('discovery filters projects and dead peers without exposing transport crede
   store.register('default','here','codex',{...target,token:'secret'});
   store.register('default','elsewhere','codex',{...target,session:randomUUID(),project:'/elsewhere'});
   store.register('default','offline','codex');
-  store.register('another','hidden','codex',target);
+  store.register('another','hidden','codex',{...target,session:randomUUID()});
   const peers=store.peers('default',process.cwd());
   assert.deepEqual(peers.map(p=>p.name),['here']);
   assert.ok(!JSON.stringify(peers).includes('secret'));

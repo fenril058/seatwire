@@ -112,17 +112,25 @@ The managed path relies on the agent's trusted SessionStart input for the sessio
 The launch ID is a generation marker, not a secret or a boundary against malicious code running as the same Unix user.
 The database must still be writable from the hook's filesystem sandbox.
 Registration errors remain visible in status; no automatic hook trust is performed.
-The runtime dependency set remains Node.js and, for spawn, tmux; no helper server framework or new package dependency is introduced.
+The runtime uses Node.js, tmux for spawn, and Git when project-team settings are used.
+The Nix package supplies these executables; no helper server framework is introduced.
 
 ## Ordinary-session discovery
 
 `context.mjs` resolves authoritative session metadata and delegates process identity to `identity.mjs`.
-SessionStart without an assigned role registers KIND-UUID in the default team.
+SessionStart without an assigned role registers KIND-UUID, choosing the default team unless explicit or configured worktree routing applies.
+Existing session UUIDs are resolved across teams before registration under the same database writer transaction.
+Their existing team and name are preserved; explicit conflicts and legacy duplicate bindings fail.
+New registrations cannot assign one UUID to different teams or names.
 Commands resolve the durable mailbox using an authoritative environment UUID, falling back to a verified live ancestor only when no UUID was supplied.
 An exact UUID does not require the host process to be visible from the caller namespace.
 Ambiguous and unknown UUIDs fail instead of selecting the latest session.
 Peers expose project, kind, name and liveness, never transport credentials.
 Project matching uses canonical directories, without Git or shell dependencies.
+Optional project-team routing is separate: it uses Git to identify the worktree root from Hook input cwd, without changing target.project or peers filtering.
+Only configured worktrees require recognized SessionStart sources and reject unresolvable resume or compact events.
+Unconfigured worktrees retain legacy source-free registration, including its inability to recover UUID associations removed by target clearing.
+See [Project team selection](docs/PROJECT_TEAMS.md) for the compatibility boundary.
 Explicit offline identities continue to work.
 Reply validates the original recipient and commits a new message without acknowledging the original.
 

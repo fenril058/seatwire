@@ -132,7 +132,54 @@ seatwire status
 ```
 
 フック連携を有効にすると、通常起動でも種類とセッション UUID から名前を自動登録します。
-チーム指定を省略すると `default` を使います。
+新規セッションでチーム指定とproject設定を省略すると `default` を使います。
+既存 UUID の登録があれば、そのチームと名前を維持します。
+
+### worktree ごとのチーム選択
+
+単一の User Hook のまま、ユーザー所有の `$XDG_CONFIG_HOME/seatwire/projects.json` で Git worktree root とチームを対応付けられます。
+`XDG_CONFIG_HOME` 未設定時は `~/.config/seatwire/projects.json` を読みます。
+設定ファイルは所有者本人が管理する通常ファイルとし、group / other に書き込みを許可しないでください。
+最大サイズは64 KiBで、symlinkの設定ファイルは受け付けません。
+例では検証専用worktreeだけを設定し、普段のcheckoutを変更しません。
+
+```json
+{
+  "version": 1,
+  "projects": {
+    "/absolute/path/to/seatwire-stagec-worktree": "stagec"
+  }
+}
+```
+
+キーには実在する Git worktree root の絶対パスを指定します。
+rootはHook入力の `cwd` からGitで特定し、symlinkを解決して完全一致で比較します。
+別worktreeを共通Git directoryでまとめたり、単純なprefixで対応させたりはしません。
+Nix packageにはGitが含まれ、直接Nodeで使う場合もこの設定を使うときはGitが必要です。
+`peers` の作業ディレクトリによる絞り込みは変更しません。
+
+設定済みworktreeでは、次の規則を適用します。
+
+- `startup / clear / fork` の新規UUIDだけが新しいチームを選択できます。
+- 新規UUIDでは `seatwire hook` の `--team`、Hook環境の `SEATWIRE_TEAM`、project設定の順に選択します。
+  `--team` がなく、Hook環境とproject設定が矛盾すれば停止します。
+- `resume / compact` はDB全体で一意に照合できた既存のチームと名前を維持します。
+  project設定変更で既存UUIDを別チームへ移しません。
+- source不明、解除済みなどで元の登録先不明、複数候補、既存identityと明示指定の矛盾は診断して停止します。
+  `--team` でこれらの検査を迂回することはできません。
+
+対応のないworktreeでは、`source` 省略を含む従来の入力を受け付け、明示指定がなければ `default` を使います。
+ただし、DBに残るUUIDの重複・矛盾は設定の有無にかかわらず拒否します。
+**解除で失われたUUIDの対応を復元できず、設定のない従来経路が `default` へ登録する可能性は残ります。**
+この制約を避ける実験は専用worktreeを設定し、新規UUIDで行ってください。
+設定ファイルが不正・読取不能、またはGit rootを観測できない場合は、未設定と推測せず停止します。
+
+共有Codex app-serverへのclient環境の伝播を保証する機能ではありません。
+User Hookを追加せず、更新時のstore pathとtrustは通常どおり手動レビューしてください。
+設計と保証範囲は [project team selection](docs/PROJECT_TEAMS.md) を参照してください。
+
+### メッセージの送受信
+
 エージェント内では以下のコマンドで協業できます。
 
 ```sh

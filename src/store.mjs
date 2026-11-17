@@ -3,7 +3,7 @@ import { mkdirSync, lstatSync, existsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { projectPath } from './context.mjs';
+import { projectPath, automaticName } from './context.mjs';
 import { name, alive, pidNamespace, sharedCodexProcess } from './identity.mjs';
 export function statePath() {
   const base = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
@@ -68,29 +68,53 @@ export class Store {
   }
   tx(fn) { this.db.exec('BEGIN IMMEDIATE'); try { const v = fn(); this.db.exec('COMMIT'); return v; } catch(e) { this.db.exec('ROLLBACK'); throw e; } }
   register(team, who, kind, target = null, expected = null) {
+    return this.tx(()=>this.#register(team,who,kind,target,expected));
+  }
+  // Resolve identity and bind under one writer lock, including legacy cross-team duplicates.
+  registerSession(kind, target, {team, environmentTeam, who, source, project = {}} = {}) {
+    return this.tx(()=>{
+      if(project.error) throw project.error;
+      const configured=project.team!==undefined;
+      if(configured && !['startup','resume','clear','compact','fork'].includes(source)) throw Error('configured worktree requires a recognized SessionStart source');
+      const matches=this.db.prepare("SELECT team,name,kind FROM agents WHERE json_extract(target,'$.session')=?").all(target.session);
+      if(matches.length>1 || (matches.length===1 && matches[0].kind!==kind)) throw Error('ambiguous session identity across teams');
+      if(matches.length) {
+        const old=matches[0], requested=team || environmentTeam;
+        if((requested && requested!==old.team) || (who && who!==old.name)) throw Error('explicit identity conflicts with registered session');
+        this.#register(old.team,old.name,kind,target);
+        return {team:old.team,name:old.name};
+      }
+      if(configured && !['startup','clear','fork'].includes(source)) throw Error('cannot restore session identity for resume/compact in configured worktree');
+      const automatic=automaticName(kind,target.session);
+      if(configured && this.db.prepare('SELECT 1 FROM agents WHERE name=?').get(automatic)) throw Error('released or conflicting session identity; refusing to guess its team');
+      if(!team && environmentTeam && project.team && environmentTeam!==project.team) throw Error('Hook environment conflicts with project team');
+      const selected=team || environmentTeam || project.team || 'default', selectedName=who || automatic;
+      this.#register(selected,selectedName,kind,target);
+      return {team:selected,name:selectedName};
+    });
+  }
+  #register(team, who, kind, target = null, expected = null) {
     name(team); name(who);
     if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
-    return this.tx(() => {
-      if (expected) {
-        const launch = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
-        const request = this.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(target.launchId);
-        if (launch && JSON.parse(launch.record).registrationRevoked) throw Error('launch registration revoked');
-        if (launch?.record !== expected.record || request?.payload !== expected.payload) throw Error('registration request changed');
-      }
-      const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
-      const previous = old?.target && JSON.parse(old.target);
-      if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
-      if (target && this.db.prepare('SELECT name FROM agents WHERE team=? AND name<>? AND json_extract(target,\'$.session\')=?').get(team,who,target.session)) throw Error('session already assigned to another name');
-      if (target && old?.kind === kind && old.target === JSON.stringify(target)) {
-        if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
-        return;
-      }
-      this.db.prepare(`INSERT INTO agents(team,name,kind,target,generation) VALUES(?,?,?,?,?)
-        ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
-        notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
+    if (expected) {
+      const launch = this.db.prepare('SELECT record FROM launches WHERE team=? AND name=?').get(team,who);
+      const request = this.db.prepare('SELECT payload FROM pending_registrations WHERE launch_id=?').get(target.launchId);
+      if (launch && JSON.parse(launch.record).registrationRevoked) throw Error('launch registration revoked');
+      if (launch?.record !== expected.record || request?.payload !== expected.payload) throw Error('registration request changed');
+    }
+    const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
+    const previous = old?.target && JSON.parse(old.target);
+    if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
+    if (target && this.db.prepare('SELECT name FROM agents WHERE NOT (team=? AND name=?) AND json_extract(target,\'$.session\')=?').get(team,who,target.session)) throw Error('session already assigned to another team or name');
+    if (target && old?.kind === kind && old.target === JSON.stringify(target)) {
       if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
-      if (kind === 'claude-code' && target?.socket) this.supersede(team,who,target);
-    });
+      return;
+    }
+    this.db.prepare(`INSERT INTO agents(team,name,kind,target,generation) VALUES(?,?,?,?,?)
+      ON CONFLICT(team,name) DO UPDATE SET kind=excluded.kind,target=excluded.target,generation=excluded.generation,
+      notified=0,lease=NULL,lease_until=0,retry_at=0,failures=0,error=NULL`).run(team,who,kind,target ? JSON.stringify(target) : null,randomUUID());
+    if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
+    if (kind === 'claude-code' && target?.socket) this.supersede(team,who,target);
   }
   // A Claude process keeps one messaging socket across /clear, so the latest session owns it.
   // Earlier sessions keep their mailboxes but are no longer nudged into the new conversation.
