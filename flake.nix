@@ -13,7 +13,7 @@
       packages = each (system: let pkgs = nixpkgs.legacyPackages.${system}; in {
         default = pkgs.stdenvNoCC.mkDerivation {
           pname = "seatwire"; version = "0.1.0"; src = ./.;
-          nativeBuildInputs = [ pkgs.makeWrapper pkgs.nodejs_24 pkgs.tmux ];
+          nativeBuildInputs = [ pkgs.makeWrapper pkgs.nodejs_24 pkgs.tmux pkgs.git ];
           doCheck = true;
           checkPhase = "node --test tests/*.test.mjs";
           installPhase = ''
@@ -23,7 +23,7 @@
             cp README.md ARCHITECTURE.md THIRD_PARTY.md LICENSE $out/share/seatwire/
             makeWrapper ${pkgs.nodejs_24}/bin/node $out/bin/seatwire \
               --add-flags $out/lib/seatwire/src/cli.mjs \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.tmux ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.tmux pkgs.git ]}
           '';
           meta.mainProgram = "seatwire";
         };
@@ -42,7 +42,7 @@
       in {
         package = self.packages.${system}.default;
         node26 = self.packages.${system}.default.overrideAttrs (_: {
-          nativeBuildInputs = with nixpkgs.legacyPackages.${system}; [ makeWrapper nodejs_26 tmux ];
+          nativeBuildInputs = with nixpkgs.legacyPackages.${system}; [ makeWrapper nodejs_26 tmux git ];
           # Compatibility check only; the pinned 26.12.1 predates the LTS release.
         });
         home-manager = hm { };

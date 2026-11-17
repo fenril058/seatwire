@@ -12,6 +12,7 @@ import { submitRegistration, reconcileRegistrations, waitReady } from './registr
 import { tick } from './notify.mjs';
 import { startWorker, workerStatus } from './worker.mjs';
 import { sessionId, automaticName, currentIdentity, projectPath } from './context.mjs';
+import { projectTeam } from './projects.mjs';
 function absolute(v) { if (!isAbsolute(v || '') || /[\x00-\x1f]/.test(v)) throw Error('invalid absolute path'); return v; }
 export function registration(kind, input={}, env=process.env) {
   if (!['codex','claude-code'].includes(kind)) throw Error('unknown agent kind');
@@ -73,10 +74,19 @@ SessionStart automatically assigns an identity; explicit team/name override it.`
       case 'register': store.register(team,who,v.kind); result={registered:who}; break;
       case 'actas': case 'hook': {
         const input=command==='hook'?JSON.parse(readFileSync(0,'utf8')):{};
-        who ||= automaticName(v.kind, sessionId(v.kind, input));
         const launchId=v['launch-id'] || process.env.SEATWIRE_LAUNCH_ID;
-        if (command==='hook' && launchId) submitRegistration(store,team,who,v.kind,launchId,input);
+        if(command==='hook' && !launchId) {
+          const target=registration(v.kind,input);let project={};
+          try { project.team=projectTeam(input.cwd); } catch(error) { project.error=error; }
+          const identity=store.registerSession(v.kind,target,{team:v.team,environmentTeam:process.env.SEATWIRE_TEAM,who:v.name || process.env.SEATWIRE_NAME,source:input.source,project});
+          team=identity.team;who=identity.name;
+        }
+        else if (command==='hook' && launchId) {
+          who ||= automaticName(v.kind, sessionId(v.kind, input));
+          submitRegistration(store,team,who,v.kind,launchId,input);
+        }
         else {
+          who ||= automaticName(v.kind, sessionId(v.kind, input));
           if (v['launch-id']) throw Error('launch-id is only accepted by SessionStart hook');
           store.register(team,who,v.kind,registration(v.kind,input));
         }
