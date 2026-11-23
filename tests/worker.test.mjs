@@ -13,7 +13,7 @@ function fixture(t) {
   const base=mkdtempSync(join(tmpdir(),'sw-worker-')), dir=join(base,'seatwire');
   const store=new Store(dir);
   store.register('test','sender','claude-code');
-  store.register('test','receiver','codex',{pid:process.pid,witness:witness(process.pid),session:randomUUID()});
+  store.register('test','receiver','codex',{pid:process.pid,witness:witness(process.pid),pidNamespace:pidNamespace(),session:randomUUID()});
   const children=[];
   t.after(async()=>{
     for (const child of children) {

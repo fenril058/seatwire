@@ -347,6 +347,13 @@ seatwire doctor
 通知完了と既読は別です。
 外部送信後のクラッシュなど、結果が不明な場合には通知が重複することがあります。
 
+### 名前と通知先の所有権
+
+既存targetのprocessを観測できない場合、別targetへの登録、offline化、managed開始は拒否し、登録を保持します。
+完全に同一targetの冪等登録と、既存offline mailboxの操作は維持します。
+namespace未記録の旧targetや、旧processの終了を確認できないresumeには制限があります。
+判定条件と既存テストの証明条件は[名前所有権保護](docs/OWNERSHIP.md)を参照してください。
+
 ## spawn / despawn
 
 ```sh

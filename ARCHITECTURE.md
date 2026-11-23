@@ -160,6 +160,8 @@ The authoritative session UUID selects a durable mailbox even if the process has
 This does not authorize a notification to a dead process: the host worker still checks the full process witness and socket identity before every delivery.
 New targets record their Linux PID namespace; peers/status return online=null when the caller cannot compare that namespace or the target is a shared Codex app-server, and peers retain these candidates with unknown availability.
 Old registrations lacking namespace metadata retain the previous liveness behavior until refreshed by a hook.
+Ownership changes use a separate conservative observer and reject unobservable or namespace-less targets, while exact target replays and mailbox reads remain available.
+See [ownership protection](docs/OWNERSHIP.md) for the compatibility boundary; delivery and online semantics are unchanged.
 
 An identical SessionStart target preserves notification progress and outstanding leases.
 A changed target on resume starts a new generation, preserving messages while fencing old completion writes.

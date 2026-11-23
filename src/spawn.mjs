@@ -3,7 +3,8 @@ import { mkdirSync, lstatSync, existsSync } from 'node:fs';
 import { join, isAbsolute, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { name, alive, witness, socketWitness } from './identity.mjs';
+import { name, alive, witness, socketWitness, pidNamespace } from './identity.mjs';
+import { requireObservedOwnership } from './ownership.mjs';
 
 export function tmux(socket, args) {
   const r = spawnSync('tmux', ['-S', socket, ...args], { encoding: 'utf8', timeout: 10000 });
@@ -38,7 +39,7 @@ export function observeServer(record) {
   const pid = Number(tmux(record.socket, ['display-message', '-p', '#{pid}']));
   const start = witness(pid);
   if (record.pid && (record.pid !== pid || record.witness !== start)) throw Error('tmux server changed');
-  return { pid, witness: start, socketWitness: socketIdentity };
+  return { pid, witness: start, pidNamespace:pidNamespace(), socketWitness: socketIdentity };
 }
 export function launch(store, team, who, kind, { prompt = '', resume = '', cli }) {
   name(team); name(who);
@@ -55,11 +56,11 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
   if (Buffer.byteLength(socket) > 100) throw Error('tmux socket path too long');
   const home = process.env.CODEX_HOME || join(homedir(), '.codex');
   if (!isAbsolute(home)) throw Error('CODEX_HOME must be absolute');
-  const reservation = { home, project: process.cwd(), id, phase: 'launching', socket, kind, created: Date.now(), starter: { pid: process.pid, witness: witness(process.pid) } };
+  const reservation = { home, project: process.cwd(), id, phase: 'launching', socket, kind, created: Date.now(), starter: { pid: process.pid, witness: witness(process.pid), pidNamespace:pidNamespace() } };
   store.tx(() => {
     if (readLaunch(store, team, who)) throw Error('managed launch already exists; despawn it first');
     const existing = store.db.prepare('SELECT target FROM agents WHERE team=? AND name=?').get(team, who);
-    if (existing?.target && alive(JSON.parse(existing.target))) throw Error('agent name owned by live session');
+    if (existing?.target && requireObservedOwnership(JSON.parse(existing.target))) throw Error('agent name owned by live session');
     store.db.prepare('INSERT INTO agents(team,name,kind,generation) VALUES(?,?,?,?) ON CONFLICT(team,name) DO NOTHING').run(team, who, kind, randomUUID());
     store.db.prepare('INSERT INTO launches(team,name,record) VALUES(?,?,?)').run(team, who, JSON.stringify(reservation));
   });
@@ -77,7 +78,7 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
   try {
     tmux(socket, ['-f', '/dev/null', 'new-session', '-d', '-s', 'agent', 'exec ' + [...env, ...args].map(quote).join(' '), ';', 'set-option', '-g', '@seatwire-launch', id]);
     const agentPid = Number(tmux(socket, ['display-message', '-p', '-t', '%0', '#{pane_pid}']));
-    const record = { ...reservation, ...observeServer(reservation), agent: { pid: agentPid, witness: witness(agentPid) }, phase: 'running' };
+    const record = { ...reservation, ...observeServer(reservation), agent: { pid: agentPid, witness: witness(agentPid), pidNamespace:pidNamespace() }, phase: 'running' };
     updateLaunch(store, team, who, id, record);
     return { team, name: who, launchId: id, socket, attach: `tmux -S ${quote(socket)} attach -t agent`, registration: 'pending SessionStart (Codex hook trust review may be required)' };
   } catch (error) {
@@ -105,8 +106,18 @@ export function despawn(store, team, who, force) {
   name(team); name(who);
   const record = readLaunch(store, team, who);
   if (!record) throw Error('not a seatwire-managed launch');
-  if (record.phase === 'launching' && alive(record.starter)) throw Error('launch is still in progress');
-  if ((record.pid && !alive(record)) || (!record.pid && !existsSync(record.socket))) {
+  if (record.phase === 'launching' && requireObservedOwnership(record.starter)) throw Error('launch is still in progress');
+  let stopped=false;
+  if(record.pid) stopped=!requireObservedOwnership(record);
+  else {
+    try {lstatSync(record.socket);}
+    catch(e) {
+      if(e.code!=='ENOENT') throw Error('cannot verify existing name ownership (socket-unobservable); managed record retained');
+      if(requireObservedOwnership(record.starter)) throw Error('launch starter is still running');
+      stopped=true;
+    }
+  }
+  if (stopped) {
     forget(store, team, who, record);
     return { state: 'already stopped' };
   }

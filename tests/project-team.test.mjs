@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../src/store.mjs';
-import { witness } from '../src/identity.mjs';
+import { currentProcess, exitedProcess } from './fixtures/process.mjs';
 
 const cli=resolve('src/cli.mjs');
 function fixture(t) {
@@ -32,7 +32,7 @@ function fixture(t) {
     return spawnSync(process.execPath,['--input-type=module','-e',script],{cwd:repo,argv0:'codex',encoding:'utf8',timeout:10000,env:{...process.env,XDG_STATE_HOME:state,XDG_CONFIG_HOME:config,SEATWIRE_TEAM:'',SEATWIRE_NAME:'',SEATWIRE_LAUNCH_ID:'',CODEX_THREAD_ID:session,CLAUDE_SESSION_ID:'',CLAUDE_CODE_SESSION_ID:'',...extraEnv}});
   };
   const rows=()=>store.db.prepare('SELECT * FROM agents ORDER BY team,name').all();
-  const target=session=>({session,pid:process.pid,witness:witness(process.pid),project:worktree});
+  const target=session=>({session,...currentProcess(),project:worktree});
   return {dir,config,repo,worktree,state,store,map,hook,rows,target,git};
 }
 
@@ -47,7 +47,7 @@ test('project Hook registers in the configured worktree team, not the parent che
 
 test('resume retains the existing custom identity after project settings change',t=>{
   const f=fixture(t),session=randomUUID();f.map({[f.worktree]:'new-team'});
-  f.store.register('original','reviewer','codex',{...f.target(session),witness:'expired'});
+  f.store.register('original','reviewer','codex',{...f.target(session),...exitedProcess(t)});
   const r=f.hook(session,{source:'resume'});assert.equal(r.status,0,r.stderr);
   assert.deepEqual(f.rows().map(x=>[x.team,x.name]),[['original','reviewer']]);
 });
@@ -152,7 +152,7 @@ test('resume and compact require an existing UUID in configured worktrees',t=>{
 
 test('compact preserves identity even when the worktree now selects another team',t=>{
   const f=fixture(t),session=randomUUID();f.map({[f.worktree]:'new-team'});
-  f.store.register('original','reviewer','codex',{...f.target(session),witness:'expired'});
+  f.store.register('original','reviewer','codex',{...f.target(session),...exitedProcess(t)});
   const r=f.hook(session,{source:'compact'});assert.equal(r.status,0,r.stderr);
   assert.deepEqual(f.rows().map(x=>[x.team,x.name]),[['original','reviewer']]);
 });

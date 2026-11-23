@@ -5,6 +5,7 @@ import { join,resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { Store } from '../src/store.mjs';
+import { exitedProcess } from './fixtures/process.mjs';
 import { launch,despawn } from '../src/spawn.mjs';
 function restoreEnvironment(previous) {
   for (const key of Object.keys(process.env)) if (!(key in previous)) delete process.env[key];
@@ -98,7 +99,7 @@ test('readiness timeout preserves a launched process; abandoned reservation can 
  await assert.rejects(waitReady(s,'test','codex',r.launchId,100),/timed out/);
  assert.equal(spawnSync('tmux',['-S',r.socket,'has-session','-t','=agent']).status,0);
  const row=JSON.parse(s.db.prepare('SELECT record FROM launches').get().record);
- const abandoned={id:row.id,socket:row.socket,kind:row.kind,phase:'launching',starter:{pid:process.pid,witness:'expired'}};
+ const abandoned={id:row.id,socket:row.socket,kind:row.kind,phase:'launching',starter:exitedProcess(t)};
  s.db.prepare('UPDATE launches SET record=?').run(JSON.stringify(abandoned));
  assert.equal(despawn(s,'test','codex',true).state,'forced stop requested');
  assert.equal(s.db.prepare('SELECT count(*) AS n FROM launches').get().n,0);
