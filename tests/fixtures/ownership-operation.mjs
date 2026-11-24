@@ -24,7 +24,8 @@ try {
       store.register('test','owner','codex',{...incoming,launchId:data.launchId},{record,payload});break;
     }
     case 'launch':result=launch(store,'test','owner','codex',{cli:new URL('../../src/cli.mjs',import.meta.url).pathname});break;
-    case 'despawn':case 'despawn-starting':case 'despawn-legacy':case 'despawn-socket':result=despawn(store,'test','owner',false);break;
+    case 'despawn':case 'despawn-starting':case 'despawn-legacy':case 'despawn-legacy-verified':case 'despawn-failed':case 'despawn-socket':result=despawn(store,'test','owner',false);break;
+    case 'despawn-legacy-force':result=despawn(store,'test','owner',true);break;
     default:throw Error('unexpected fixture action');
   }
 } catch(e) {error=e.message;}

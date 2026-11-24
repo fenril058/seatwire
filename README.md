@@ -420,6 +420,12 @@ Claude から spawn した Codex に、親 Claude の通知用ソケットとト
 エージェントの終了を最大 10 秒待ち、終了を確認できれば `stopped`、できなければ `forced stop requested; agent still exiting` を返します。
 エージェントが生きている間は同じ名前の spawn を拒否するため、`stopped` の後は同じ名前ですぐに `--resume` できます。
 終了した起動記録が残っている場合、despawn で整理してから再度 spawn します。
+ただしnamespace未記録の旧managed記録では、`running` の保存済みsocket identity、launch ID、server PIDとwitnessを現在の対象にすべて照合できる場合だけ、通常despawnと`--force`を許可します。
+操作時もtmux server内でlaunch IDとPIDを確認し、対象交換があれば拒否します。
+旧launchingやfailed、server終了後の旧記録、必須情報の欠落、socketやPIDの交換、proc観測拒否では、両操作を拒否して記録を保持します。
+情報不足の記録を強制解除するCLI経路はなく、外部でserverを止めても自動解除できません。
+また、旧targetのnamespace欠落はHook再実行やmanaged停止では解消しないため、旧targetの同名resumeは引き続き拒否される場合があります。
+online表示の互換性、操作できる条件と個別レビューが必要な条件は[所有権保護](docs/OWNERSHIP.md)を参照してください。
 管理下 launch で異なる session UUID を観測すると、初回 pending を含め、その launch の自動通知登録を失効させます。
 旧通知先と通知リース、pending request を同じ transaction で無効化し、未読と ack 履歴は保持します。
 失効は DB の launch レコードに保存し、同じ launch 内では元 UUID の古い SessionStart も `source: resume` の入力も復旧に使いません。

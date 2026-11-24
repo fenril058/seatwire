@@ -5,15 +5,22 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { createServer } from 'node:net';
 import { Store } from '../src/store.mjs';
+import { socketWitness } from '../src/identity.mjs';
 import { currentProcess, exitedProcess } from './fixtures/process.mjs';
 
 function snapshot(store) {
   return Object.fromEntries(['agents','launches','pending_registrations','messages'].map(table=>[table,store.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
 }
-for(const action of ['replace','offline','resume','launch','despawn','despawn-starting','despawn-legacy','despawn-socket','expected','identical']) test(`observation denied: ${action} preserves ownership and progress`,t=>{
+// Resolve POSIX sh from the test runner's PATH (including a Nix store PATH),
+// independently of the user's interactive SHELL and the child's restricted PATH.
+const shell=spawnSync('sh',['-c','command -v sh'],{encoding:'utf8'});
+assert.equal(shell.status,0,shell.stderr);const posixShell=shell.stdout.trim();
+for(const action of ['replace','offline','resume','launch','despawn','despawn-starting','despawn-legacy','despawn-legacy-verified','despawn-legacy-force','despawn-failed','despawn-socket','expected','identical']) test(`observation denied: ${action} preserves ownership and progress`,async t=>{
   const base=mkdtempSync(join(tmpdir(),'sw-own-')),store=new Store(join(base,'seatwire'));
-  t.after(()=>{store.close();rmSync(base,{recursive:true,force:true});});
+  let endpoint;
+  t.after(()=>{endpoint?.close();store.close();rmSync(base,{recursive:true,force:true});});
   const old={...currentProcess(),session:randomUUID(),project:base,home:base};
   store.register('test','owner','codex',old);store.register('test','sender','codex');
   store.send('test','sender','owner','already handled');store.ack('test','owner',[1]);store.send('test','sender','owner','unread');
@@ -23,6 +30,11 @@ for(const action of ['replace','offline','resume','launch','despawn','despawn-st
     ? {...currentProcess(),id:launchId,phase:'running',socket:join(base,'not-a-socket')}
     : {starter:currentProcess(),id:launchId,phase:'launching',socket:join(base,'not-a-socket')}));
   if(action==='despawn-legacy')store.db.prepare('UPDATE launches SET record=?').run(JSON.stringify({pid:process.pid,witness:old.witness,id:launchId,phase:'running',socket:join(base,'not-a-socket')}));
+  if(['despawn-legacy-verified','despawn-legacy-force'].includes(action)) {
+    const socket=join(base,'socket');endpoint=createServer();await new Promise(r=>endpoint.listen(socket,r));
+    store.db.prepare('UPDATE launches SET record=?').run(JSON.stringify({pid:process.pid,witness:old.witness,id:launchId,socketWitness:socketWitness(socket),phase:'running',socket}));
+  }
+  if(action==='despawn-failed')store.db.prepare('UPDATE launches SET record=?').run(JSON.stringify({starter:currentProcess(),id:launchId,phase:'failed',socket:join(base,'not-a-socket')}));
   if(action==='despawn-socket') {
     const hidden=mkdtempSync(join(tmpdir(),'sw-own-socket-'));t.after(()=>rmSync(hidden,{recursive:true,force:true}));
     writeFileSync(join(hidden,'not-a-socket'),'fixture');
@@ -37,7 +49,7 @@ for(const action of ['replace','offline','resume','launch','despawn','despawn-st
   mkdirSync(join(base,'home'));mkdirSync(join(base,'runtime'));
   const out=openSync(join(base,'stdout'),'wx',0o600),err=openSync(join(base,'stderr'),'wx',0o600);
   let child;
-  try {child=spawnSync(process.env.SHELL||'/bin/sh',['tests/fixtures/restricted-node.sh',process.execPath,resolve('.'),base,resolve('tests/fixtures/ownership-operation.mjs'),input],{stdio:['ignore',out,err],env:{HOME:join(base,'home'),PATH:'/usr/bin:/bin',XDG_RUNTIME_DIR:join(base,'runtime'),CODEX_HOME:join(base,'home')},timeout:8000});}
+  try {child=spawnSync(posixShell,['tests/fixtures/restricted-node.sh',process.execPath,resolve('.'),base,resolve('tests/fixtures/ownership-operation.mjs'),input],{stdio:['ignore',out,err],env:{HOME:join(base,'home'),PATH:'/usr/bin:/bin',XDG_RUNTIME_DIR:join(base,'runtime'),CODEX_HOME:join(base,'home')},timeout:8000});}
   finally {closeSync(out);closeSync(err);}
   assert.equal(child.status,0,readFileSync(join(base,'stderr'),'utf8'));assert(!child.error,child.error?.message);
   const result=JSON.parse(readFileSync(join(base,'stdout'),'utf8'));

@@ -31,6 +31,17 @@ despawnはstarterやserverの観測失敗をalready stoppedへ読み替えて管
 socketの観測エラーも不存在として扱わない。
 確認できたmanaged sessionへの通常interruptと明示forceは維持する。
 
+旧形式のrunning記録は、server、starter、agentにnamespaceフィールドがなくても、保存済みsocket identity、launch ID、server PIDとwitnessがすべて存在し、現在の対象に一致する場合に限り、明示的なinterruptとforceを許可する。
+呼出元のprocfs対応とserverのwitnessを確認してから、socketの種類、所有者、identity、serverのlaunch IDとPIDとwitnessを照合し、socket identityを再確認する。
+実際の操作はtmux server内でもlaunch IDとPIDの一致を条件とし、事前照合後に異なるserverへ接続した場合は操作と管理記録の削除を拒否する。
+この経路は生存するmanaged対象への明示操作だけを認め、PID namespaceを推測して補完せず、名前所有権やprocess終了の証明に流用しない。
+launch IDは同じOSユーザーに対する認証ではなく、専用serverを区別する起動ごとの識別子である。
+
+旧launching記録、旧failed記録、serverやsocketが消失した旧running記録は、この経路では整理できない。
+必須情報の欠落、socketの交換、launch IDやPIDやwitnessの不一致、proc観測拒否、namespaceの明示的な不一致では、通常despawnとforceの両方を拒否して記録を保持する。
+旧記録のserverが実際には終了済みでも、情報不足を終了証明にはしない。
+namespace付きfailed記録でPIDとsocketがない場合も、starterの終了を正に確認した場合だけalready stoppedとして整理し、starter生存または観測不能なら拒否する。
+
 新しい自動名を使うclear/fork、Claudeのprocess/socket交代、managed UUID変更によるrevocationは従来の別処理である。
 これらの明示的な会話交代を、観測失敗を理由とする自動解除へ一般化しない。
 spawn.exitedの停止後待機、通知配送、online表示など他のalive利用は、この変更では改修していない。
@@ -39,10 +50,17 @@ Issue #6のsocket削除とheartbeat GCも含めない。
 ## 互換性の制限
 
 namespace未記録や不正なwitnessを持つ旧targetは、安全な所有権変更の根拠にならない。
+online表示は旧来の生存確認を維持するため、観測失敗がofflineとして見える場合があるが、それは所有権を解除できる根拠ではない。
 完全一致の再提示、UUIDによるmailbox読取、offline mailbox自体の操作は維持するが、別targetへのresumeが保留になる場合がある。
+Hookを再実行してもnamespace未記録targetが自動的に更新されるわけではなく、同じprocessやUUIDというだけで制限を解除しない。
 実際には旧processが終了していても、呼出側がその情報を観測できなければ新規targetへの変更は拒否する。
 古いUUID対応を推測で復元したり、設定を弱めたり、DBやtargetを自動解除して回避したりはしない。
 通常のhost経路で再確認し、所有権を証明できない旧記録は個別レビューの対象とする。
+旧managed serverが前述の全条件で照合できる間は、明示的なinterruptまたはforceが安全な操作経路になる。
+照合できない記録をCLIで強制解除する経路は提供しない。
+外部でserverを終了させても旧launch行は自動解除できず、同じ名前でのspawnは保留される。
+managed launchの明示forceが成功しても、namespace未記録のagent targetを自動更新したり、通知先や未読やackを削除したりはしない。
+したがって旧targetの制限によって同名resumeが引き続き保留になる場合があり、個別レビューには別途承認が必要である。
 
 ## 隔離テストの証明条件
 
@@ -56,3 +74,5 @@ resumeとcompactのteam/name保持、通知generationのfence、管理予約の�
 別namespaceの表示fixtureは、登録APIで生存ownerのnamespaceを変更する代わりに、隔離DBへ観測条件を直接設定する。
 表示、通知、ackの既存assertは弱めていない。
 不正なwitnessを観測不能として保護するテストは別に維持する。
+旧形式の実record構造でinterruptとforceを検証し、情報不足、実socket交換、PIDとwitnessの不一致、操作直前のlaunch ID交換を拒否することを確認する。
+failed記録はstarterの生存、終了確認、namespace欠落、観測拒否を分けて検証する。

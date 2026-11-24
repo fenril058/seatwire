@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, lstatSync, existsSync } from 'node:fs';
+import { mkdirSync, lstatSync, existsSync, readFileSync, readlinkSync } from 'node:fs';
 import { join, isAbsolute, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -93,6 +93,30 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
   }
 }
 const FORCE_EXIT_MS = 10000;
+// A legacy record cannot prove process absence without its PID namespace. It can
+// still identify a live managed endpoint, using all three saved identities. This
+// evidence authorizes only an explicit command to that server, never migration
+// of namespace metadata or an "already stopped" decision.
+function verifyLegacyServer(record) {
+  try {
+    if (record.phase !== 'running' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(record.id || '')
+        || !/^\d+:\d+$/.test(record.socketWitness || '')
+        || !Number.isSafeInteger(record.pid) || record.pid < 2
+        || !new RegExp(`^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}:${record.pid}:\\d+$`).test(record.witness || '')) throw Error();
+    const pids=readFileSync('/proc/self/status','utf8').match(/^NSpid:\s*(.+)$/m)?.[1].trim().split(/\s+/);
+    if (readlinkSync('/proc/self')!==String(process.pid) || pids?.length!==1 || pids[0]!==String(process.pid)
+        || witness(record.pid)!==record.witness) throw Error();
+    observeServer(record);
+    if(socketWitness(record.socket)!==record.socketWitness) throw Error();
+  } catch {throw Error('cannot verify existing name ownership (legacy-managed-unverified); managed record retained');}
+}
+function legacyCommand(record, force) {
+  // Check on the connection that executes the command, not just on the earlier
+  // inspection connections. A replacement endpoint must not receive the action.
+  const condition=`#{&&:#{==:#{@seatwire-launch},${record.id}},#{==:#{pid},${record.pid}}}`;
+  const result=tmux(record.socket,['if-shell','-F',condition,force?'kill-session -t =agent':'send-keys -t %0 C-c','display-message -p seatwire-managed-identity-changed']);
+  if(result==='seatwire-managed-identity-changed') throw Error('managed server identity changed; refusing operation and retaining record');
+}
 function exited(process, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -106,30 +130,36 @@ export function despawn(store, team, who, force) {
   name(team); name(who);
   const record = readLaunch(store, team, who);
   if (!record) throw Error('not a seatwire-managed launch');
-  if (record.phase === 'launching' && requireObservedOwnership(record.starter)) throw Error('launch is still in progress');
-  let stopped=false;
-  if(record.pid) stopped=!requireObservedOwnership(record);
+  const legacy=[record,record.starter,record.agent].every(p=>!p || !Object.hasOwn(p,'pidNamespace'));
+  if(legacy) verifyLegacyServer(record);
   else {
-    try {lstatSync(record.socket);}
-    catch(e) {
-      if(e.code!=='ENOENT') throw Error('cannot verify existing name ownership (socket-unobservable); managed record retained');
-      if(requireObservedOwnership(record.starter)) throw Error('launch starter is still running');
-      stopped=true;
+    if (record.phase === 'launching' && requireObservedOwnership(record.starter)) throw Error('launch is still in progress');
+    let stopped=false;
+    if(record.pid) stopped=!requireObservedOwnership(record);
+    else {
+      try {lstatSync(record.socket);}
+      catch(e) {
+        if(e.code!=='ENOENT') throw Error('cannot verify existing name ownership (socket-unobservable); managed record retained');
+        if(requireObservedOwnership(record.starter)) throw Error('launch starter is still running');
+        stopped=true;
+      }
     }
+    if (stopped) {
+      forget(store, team, who, record);
+      return { state: 'already stopped' };
+    }
+    observeServer(record);
   }
-  if (stopped) {
-    forget(store, team, who, record);
-    return { state: 'already stopped' };
-  }
-  observeServer(record);
   if (force) {
-    tmux(record.socket, ['kill-session', '-t', '=agent']);
+    if(legacy) legacyCommand(record,true);
+    else tmux(record.socket, ['kill-session', '-t', '=agent']);
     forget(store, team, who, record);
     // An agent may save its session after SIGHUP, and its name stays owned until it exits.
     if (!record.agent) return { state: 'forced stop requested' };
     return exited(record.agent, FORCE_EXIT_MS) ? { state: 'stopped' } : { state: 'forced stop requested; agent still exiting' };
   }
-  tmux(record.socket, ['send-keys', '-t', '%0', 'C-c']);
+  if(legacy) legacyCommand(record,false);
+  else tmux(record.socket, ['send-keys', '-t', '%0', 'C-c']);
   return { state: 'interrupt requested; inspect/exit the agent normally, or explicitly use --force', socket: record.socket };
 }
 export function registrationDetail(registration, request, sessionObserved = false) {
