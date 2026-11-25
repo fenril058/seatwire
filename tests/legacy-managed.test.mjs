@@ -16,7 +16,8 @@ function snapshot(s, launches=true) {
 async function fixture(t) {
   const dir=mkdtempSync(join(tmpdir(),'sw-legacy-')),previous={...process.env},s=new Store(join(dir,'seatwire'));
   const ready=join(dir,'ready'),interrupted=join(dir,'interrupted'),fake=join(dir,'agent');
-  writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nprocess.on('SIGINT',()=>writeFileSync(${JSON.stringify(interrupted)},'yes'));\nwriteFileSync(${JSON.stringify(ready)},'ready');\nsetInterval(()=>{},1000);\n`,{mode:0o700});
+  // Expose the file-creation/write window observed in the CI update-package build.
+  writeFileSync(fake,`#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nprocess.on('SIGINT',()=>{writeFileSync(${JSON.stringify(interrupted)},'');setTimeout(()=>writeFileSync(${JSON.stringify(interrupted)},'yes'),100);});\nwriteFileSync(${JSON.stringify(ready)},'ready');\nsetInterval(()=>{},1000);\n`,{mode:0o700});
   process.env.SEATWIRE_CODEX=fake;process.env.XDG_RUNTIME_DIR=dir;
   let original;
   t.after(()=>{
@@ -43,7 +44,7 @@ async function fixture(t) {
 test('legacy running server: verified interrupt preserves every row and namespace-less record',async t=>{
   const {s,interrupted}=await fixture(t),before=snapshot(s);
   assert.match(despawn(s,'test','owner',false).state,/interrupt requested/);
-  for(let i=0;i<100&&!existsSync(interrupted);i++)await new Promise(r=>setTimeout(r,20));
+  for(let i=0;i<100&&(!existsSync(interrupted)||readFileSync(interrupted,'utf8')!=='yes');i++)await new Promise(r=>setTimeout(r,20));
   assert.equal(readFileSync(interrupted,'utf8'),'yes');assert.deepEqual(snapshot(s),before);
 });
 test('legacy running server: verified force stops only its server and removes only its launch',async t=>{
