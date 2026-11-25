@@ -6,6 +6,14 @@ PID namespaceとprocfsの対応を確認し、processの一致、終了、不一
 procがENOENTでも、それだけで終了とせず、同じPID namespaceでsignal 0がESRCHを返すことを確認する。
 signal 0は実際のsignalを送らず、processの存在を照会する。
 
+## 利用前提とbootによる終了確認
+
+stateは単一Linuxホストで使用し、process witnessと現在のboot_idは、そのホストの真正なkernel情報から取得する。
+別kernelや仮想化されたboot IDを持つ環境とのDB共有は対象外であり、WAL設定がこの前提を自動的に強制するわけではない。
+Linuxのboot_idは同じkernelのPID namespaceごとには分かれないため、正常なwitnessのboot IDが現在と異なる場合は、namespaceの有無や一致に依存せず終了を確認する。
+boot比較はPIDを解釈する前に行い、同一boot内でのprocess照合には引き続きnamespaceとprocfsの対応を要求する。
+boot IDを読めない場合や形式が不正な場合、不正なwitnessでは、終了を推測せずunknownとして保護する。
+
 ## 登録の判断
 
 | 条件 | 動作 |
@@ -14,8 +22,9 @@ signal 0は実際のsignalを送らず、processの存在を照会する。
 | 同一kindで保存JSONと完全に同一のtarget | 冪等登録を維持し、generation、通知進捗、leaseを変更しない |
 | 生存する既存ownerを確認 | 別UUID、別process、別namespace、offlineへの変更を拒否する |
 | 同じprocessとUUIDを確認したmetadata変更 | 既存のtarget変更規則で更新する |
+| 正常なwitnessのboot IDが現在と異なる | namespace未記録や不一致でも終了を確認し、既存UUID等の制約を満たす登録とresumeを許可する |
 | 終了または正しい観測範囲でwitness不一致を確認 | UUID重複等の既存制約を満たせば登録とresumeを許可する |
-| 権限不足、namespace不明、不正な記録、観測不能 | 完全同一targetの再提示を除き、変更を拒否して既存行を保持する |
+| 終了を確認できない権限不足、同一bootのnamespace不明、不正な記録、boot観測不能 | 完全同一targetの再提示を除き、変更を拒否して既存行を保持する |
 
 拒否時はagents、launches、pending、messagesを登録transactionの途中状態にしない。
 reconcileが拒否を捕捉した場合は、従来の規則でpendingのerrorを記録できるが、成功扱いで消したり既存targetを解除したりはしない。
@@ -26,18 +35,22 @@ reconcileが拒否を捕捉した場合は、従来の規則でpendingのerror�
 
 新しいmanaged記録はstarter、server、agentのPID namespaceをJSONへ記録する。
 DB schemaは2のままである。
+despawnは、serverが記録されていればserver、なければstarterの正常なwitnessで過去bootを確認し、存在するstarterとagentもすべて過去bootの正常なwitnessである場合、launch行だけをrecord一致条件で整理する。
+この終了確認はnamespace未記録の旧形式とrunning、launching、failedの各phaseにも適用し、通常とforceの両方でalready stoppedを返す。
+processへのsignal送信、tmux接続、socketの検査や削除は行わず、登録、pending、メッセージ、ack、通知進捗を変更しない。
+同一bootのprocessや不正なprocess情報が混在した記録は、この経路で整理しない。
 managed開始は既存ownerが観測不能ならreservationやtmux呼出の前に拒否する。
 despawnはstarterやserverの観測失敗をalready stoppedへ読み替えて管理記録を削除しない。
 socketの観測エラーも不存在として扱わない。
 確認できたmanaged sessionへの通常interruptと明示forceは維持する。
 
-旧形式のrunning記録は、server、starter、agentにnamespaceフィールドがなくても、保存済みsocket identity、launch ID、server PIDとwitnessがすべて存在し、現在の対象に一致する場合に限り、明示的なinterruptとforceを許可する。
+同一bootの旧形式running記録は、server、starter、agentにnamespaceフィールドがなくても、保存済みsocket identity、launch ID、server PIDとwitnessがすべて存在し、現在の対象に一致する場合に限り、明示的なinterruptとforceを許可する。
 呼出元のprocfs対応とserverのwitnessを確認してから、socketの種類、所有者、identity、serverのlaunch IDとPIDとwitnessを照合し、socket identityを再確認する。
 実際の操作はtmux server内でもlaunch IDとPIDの一致を条件とし、事前照合後に異なるserverへ接続した場合は操作と管理記録の削除を拒否する。
 この経路は生存するmanaged対象への明示操作だけを認め、PID namespaceを推測して補完せず、名前所有権やprocess終了の証明に流用しない。
 launch IDは同じOSユーザーに対する認証ではなく、専用serverを区別する起動ごとの識別子である。
 
-旧launching記録、旧failed記録、serverやsocketが消失した旧running記録は、この経路では整理できない。
+過去bootによる終了を確認できない旧launching記録、旧failed記録、serverやsocketが消失した旧running記録は、この経路では整理できない。
 必須情報の欠落、socketの交換、launch IDやPIDやwitnessの不一致、proc観測拒否、namespaceの明示的な不一致では、通常despawnとforceの両方を拒否して記録を保持する。
 旧記録のserverが実際には終了済みでも、情報不足を終了証明にはしない。
 namespace付きfailed記録でPIDとsocketがない場合も、starterの終了を正に確認した場合だけalready stoppedとして整理し、starter生存または観測不能なら拒否する。
@@ -49,16 +62,17 @@ Issue #6のsocket削除とheartbeat GCも含めない。
 
 ## 互換性の制限
 
-namespace未記録や不正なwitnessを持つ旧targetは、安全な所有権変更の根拠にならない。
+同一bootでnamespace未記録の旧targetや、不正なwitnessを持つtargetは、安全な所有権変更の根拠にならない。
 online表示は旧来の生存確認を維持するため、観測失敗がofflineとして見える場合があるが、それは所有権を解除できる根拠ではない。
 完全一致の再提示、UUIDによるmailbox読取、offline mailbox自体の操作は維持するが、別targetへのresumeが保留になる場合がある。
-Hookを再実行してもnamespace未記録targetが自動的に更新されるわけではなく、同じprocessやUUIDというだけで制限を解除しない。
+同一bootではHookを再実行してもnamespace未記録targetが自動的に更新されるわけではなく、同じprocessやUUIDというだけで制限を解除しない。
+過去bootの終了を正常なwitnessで確認できる場合は、namespace未記録でも正当なresumeで元のmailboxへ新しいtargetを登録できる。
 実際には旧processが終了していても、呼出側がその情報を観測できなければ新規targetへの変更は拒否する。
 古いUUID対応を推測で復元したり、設定を弱めたり、DBやtargetを自動解除して回避したりはしない。
 通常のhost経路で再確認し、所有権を証明できない旧記録は個別レビューの対象とする。
 旧managed serverが前述の全条件で照合できる間は、明示的なinterruptまたはforceが安全な操作経路になる。
 照合できない記録をCLIで強制解除する経路は提供しない。
-外部でserverを終了させても旧launch行は自動解除できず、同じ名前でのspawnは保留される。
+同一boot内で外部からserverを終了させただけでは旧launch行を自動解除できず、同じ名前でのspawnは保留される。
 managed launchの明示forceが成功しても、namespace未記録のagent targetを自動更新したり、通知先や未読やackを削除したりはしない。
 したがって旧targetの制限によって同名resumeが引き続き保留になる場合があり、個別レビューには別途承認が必要である。
 
@@ -76,3 +90,5 @@ resumeとcompactのteam/name保持、通知generationのfence、管理予約の�
 不正なwitnessを観測不能として保護するテストは別に維持する。
 旧形式の実record構造でinterruptとforceを検証し、情報不足、実socket交換、PIDとwitnessの不一致、操作直前のlaunch ID交換を拒否することを確認する。
 failed記録はstarterの生存、終了確認、namespace欠落、観測拒否を分けて検証する。
+過去bootの正例は合成したboot IDを使い、observerの値、同UUID resume、managed開始ガード、各phaseの整理、再利用されたsocketと他行の保持を検証する。
+同一boot、boot観測不能、不正または混在したprocess情報の拒否も維持し、検査のためにhostを再起動することはない。

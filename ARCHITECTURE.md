@@ -161,8 +161,11 @@ This does not authorize a notification to a dead process: the host worker still 
 New targets record their Linux PID namespace; peers/status return online=null when the caller cannot compare that namespace or the target is a shared Codex app-server, and peers retain these candidates with unknown availability.
 Old targets lacking namespace metadata retain the previous online-display behavior; an observation error may still appear as offline on that legacy display path.
 This display compatibility does not establish ownership or authorize target changes.
-Re-running a hook does not automatically refresh a namespace-less target: only an exact target replay remains idempotent, and ownership changes remain blocked without the required evidence.
-Ownership changes use a separate conservative observer and reject unobservable or namespace-less targets, while exact target replays and mailbox reads remain available.
+Within the same boot, re-running a hook does not automatically refresh a namespace-less target: only an exact target replay remains idempotent, and ownership changes remain blocked without the required evidence.
+Ownership checks compare a valid witness's boot ID first: a different boot proves exit even when the recorded PID namespace is missing or different.
+This assumes state on a single Linux host and its genuine kernel boot ID; database sharing across kernels or virtualized boot IDs is unsupported and is not prevented merely by WAL mode.
+Within the same boot, the ownership observer still rejects unobservable or namespace-less targets, while exact target replays and mailbox reads remain available.
+Despawn can forget a previous-boot launch without touching a process or socket only when its server (or starter) and every recorded process have valid previous-boot witnesses; mixed or malformed evidence is retained.
 See [ownership protection](docs/OWNERSHIP.md) for the compatibility boundary; delivery and online semantics are unchanged.
 
 An identical SessionStart target preserves notification progress and outstanding leases.

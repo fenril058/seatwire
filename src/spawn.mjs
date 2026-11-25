@@ -4,7 +4,7 @@ import { join, isAbsolute, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { name, alive, witness, socketWitness, pidNamespace } from './identity.mjs';
-import { requireObservedOwnership } from './ownership.mjs';
+import { observeOwnership, requireObservedOwnership } from './ownership.mjs';
 
 export function tmux(socket, args) {
   const r = spawnSync('tmux', ['-S', socket, ...args], { encoding: 'utf8', timeout: 10000 });
@@ -93,10 +93,20 @@ export function launch(store, team, who, kind, { prompt = '', resume = '', cli }
   }
 }
 const FORCE_EXIT_MS = 10000;
-// A legacy record cannot prove process absence without its PID namespace. It can
-// still identify a live managed endpoint, using all three saved identities. This
-// evidence authorizes only an explicit command to that server, never migration
-// of namespace metadata or an "already stopped" decision.
+function launchFromPreviousBoot(record) {
+  const server=Object.hasOwn(record,'pid') || Object.hasOwn(record,'witness');
+  const processes=server ? [record] : [];
+  for(const key of ['starter','agent'])if(Object.hasOwn(record,key))processes.push(record[key]);
+  // Require a server or its starter, and positive boot-change evidence for every
+  // recorded process. Missing, malformed or current-boot evidence cannot qualify.
+  const changed=processes.map(p=>observeOwnership(p).reason==='boot-changed');
+  const ended=(server || Object.hasOwn(record,'starter')) && changed.every(Boolean);
+  if(changed.some(Boolean) && !ended) throw Error('cannot verify existing name ownership (inconsistent-process-record); managed record retained');
+  return ended;
+}
+// Within one boot, a namespace-less record cannot prove process absence. It can
+// still identify a live managed endpoint using all three saved identities. This
+// endpoint evidence never supplies missing namespace metadata or proves exit.
 function verifyLegacyServer(record) {
   try {
     if (record.phase !== 'running' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(record.id || '')
@@ -130,6 +140,11 @@ export function despawn(store, team, who, force) {
   name(team); name(who);
   const record = readLaunch(store, team, who);
   if (!record) throw Error('not a seatwire-managed launch');
+  if(launchFromPreviousBoot(record)) {
+    // Do not inspect or operate on a socket/PID possibly reused in this boot.
+    forget(store,team,who,record);
+    return {state:'already stopped'};
+  }
   const legacy=[record,record.starter,record.agent].every(p=>!p || !Object.hasOwn(p,'pidNamespace'));
   if(legacy) verifyLegacyServer(record);
   else {
