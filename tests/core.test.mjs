@@ -9,6 +9,7 @@ import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { Store } from '../src/store.mjs';
 import { witness, socketWitness } from '../src/identity.mjs';
+import { currentProcess } from './fixtures/process.mjs';
 import { tick } from '../src/notify.mjs';
 function fixture(t) {
   const dir=mkdtempSync(join(tmpdir(),'seatwire-test-'));
@@ -44,7 +45,7 @@ test('multiple processes serialize writes without losing messages',async t=>{
 });
 test('lease exclusion, crash recovery, session generation fencing',t=>{
   const {s}=fixture(t);
-  const target={pid:process.pid,witness:witness(process.pid),session:randomUUID()};
+  const target={...currentProcess(),session:randomUUID()};
   s.register('test','bob','codex',target);s.send('test','alice','bob','x');
   const first=s.claim(); assert.ok(first); assert.equal(s.claim(),null);
   s.db.prepare('UPDATE agents SET lease_until=0').run();
@@ -87,11 +88,11 @@ test('reject symlinks and public state directories',t=>{
   chmodSync(join(dir,'seatwire'),0o755);assert.throws(()=>new Store(join(dir,'seatwire')),/unsafe state/);
 });
 test('live owner cannot be replaced',t=>{
-  const {s}=fixture(t);s.register('test','bob','codex',{pid:process.pid,witness:witness(process.pid),session:randomUUID()});
+  const {s}=fixture(t);s.register('test','bob','codex',{...currentProcess(),session:randomUUID()});
   assert.throws(()=>s.register('test','bob','codex'),/live session/);
 });
 test('same PID with different session cannot replace a live registration',t=>{
-  const {s}=fixture(t);const owner={pid:process.pid,witness:witness(process.pid),session:randomUUID()};
+  const {s}=fixture(t);const owner={...currentProcess(),session:randomUUID()};
   s.register('test','bob','codex',owner);
   assert.throws(()=>s.register('test','bob','codex',{...owner,session:randomUUID()}),/live session/);
 });

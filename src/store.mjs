@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { projectPath, automaticName } from './context.mjs';
 import { name, alive, pidNamespace, sharedCodexProcess } from './identity.mjs';
+import { requireObservedOwnership } from './ownership.mjs';
 export function statePath() {
   const base = process.env.XDG_STATE_HOME || join(homedir(), '.local/state');
   if (!isAbsolute(base)) throw Error('XDG_STATE_HOME must be absolute');
@@ -104,9 +105,12 @@ export class Store {
     }
     const old = this.db.prepare('SELECT * FROM agents WHERE team=? AND name=?').get(team,who);
     const previous = old?.target && JSON.parse(old.target);
-    if (previous && alive(previous) && (!target || previous.witness !== target.witness || previous.session !== target.session)) throw Error('agent name owned by live session');
+    const identical=target && old?.kind===kind && old.target===JSON.stringify(target);
+    if (previous && !identical && requireObservedOwnership(previous)
+        && (!target || old.kind!==kind || previous.pid!==target.pid || previous.pidNamespace!==target.pidNamespace
+          || previous.witness!==target.witness || previous.session!==target.session)) throw Error('agent name owned by live session');
     if (target && this.db.prepare('SELECT name FROM agents WHERE NOT (team=? AND name=?) AND json_extract(target,\'$.session\')=?').get(team,who,target.session)) throw Error('session already assigned to another team or name');
-    if (target && old?.kind === kind && old.target === JSON.stringify(target)) {
+    if (identical) {
       if (expected) this.db.prepare('DELETE FROM pending_registrations WHERE launch_id=?').run(target.launchId);
       return;
     }

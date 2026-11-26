@@ -8,11 +8,12 @@ import { randomUUID } from 'node:crypto';
 import { Store } from '../src/store.mjs';
 import { witness } from '../src/identity.mjs';
 import { currentIdentity } from '../src/context.mjs';
+import { currentProcess, exitedProcess } from './fixtures/process.mjs';
 function fixture(t) {
   const dir=mkdtempSync(join(tmpdir(),'sw-lifecycle-'));
   const store=new Store(join(dir,'seatwire'));
   t.after(()=>{store.close();rmSync(dir,{recursive:true,force:true});});
-  const target={session:randomUUID(),pid:process.pid,witness:witness(process.pid),project:process.cwd()};
+  const target={session:randomUUID(),...currentProcess(),project:process.cwd()};
   store.register('default','receiver','codex',target);
   store.register('default','sender','claude-code');
   return {store,target};
@@ -48,7 +49,7 @@ test('resumed session retains mailbox and fences the prior notification lease',t
   const {store,target}=fixture(t);
   const id=store.send('default','sender','receiver','retained');
   const claim=store.claim();
-  store.db.prepare("UPDATE agents SET target=json_set(target,'$.witness','expired') WHERE name='receiver'").run();
+  store.db.prepare("UPDATE agents SET target=? WHERE name='receiver'").run(JSON.stringify({...target,...exitedProcess(t)}));
   store.register('default','receiver','codex',target);
   store.finish(claim,null);
   assert.equal(store.status().find(a=>a.name==='receiver').notified,0);
@@ -56,7 +57,7 @@ test('resumed session retains mailbox and fences the prior notification lease',t
 });
 test('peers in another PID namespace report unknown, not incorrectly offline',t=>{
   const {store,target}=fixture(t);
-  store.register('default','receiver','codex',{...target,pidNamespace:'pid:[other]'});
+  store.db.prepare("UPDATE agents SET target=? WHERE name='receiver'").run(JSON.stringify({...target,pidNamespace:'pid:[other]'}));
   const peers=store.peers('default',process.cwd());
   assert.equal(peers.length,1);
   assert.equal(peers[0].online,null);
@@ -119,7 +120,7 @@ test('status separates accepted unread from pending, in-flight, failed and ackno
 test('status keeps unknown liveness distinct from offline and missing targets',t=>{
   const {store,target}=fixture(t);
   store.send('default','sender','receiver','pending');
-  store.register('default','receiver','codex',{...target,pidNamespace:'pid:[other]'});
+  store.db.prepare("UPDATE agents SET target=? WHERE name='receiver'").run(JSON.stringify({...target,pidNamespace:'pid:[other]'}));
   let row=store.status().find(a=>a.name==='receiver');
   assert.equal(row.online,null);assert.equal(row.notification.state,'pending');
   store.db.prepare("UPDATE agents SET target=json_set(target,'$.pidNamespace',NULL,'$.witness','expired') WHERE name='receiver'").run();
